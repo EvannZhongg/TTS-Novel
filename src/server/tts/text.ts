@@ -6,7 +6,7 @@ import type {
   TextPreprocessResult,
 } from './types';
 
-const CHAPTER_TITLE_RE = /^\s*(?:§{2,}\s*(?<marked_title>第\s*[0-9０-９一二三四五六七八九十百千万零两]+\s*(?:章|回).*)|(?<plain_digit_title>第\s*[0-9０-９]+\s*(?:章|回).*)|(?<plain_chinese_title>第\s*[一二三四五六七八九十百千万零两]+\s*(?:章|回)(?:\s*$|[\s：:].*)))\s*$/;
+const CHAPTER_TITLE_RE = /^\s*(?:§{2,}\s*(?<marked_title>第\s*[0-9０-９一二三四五六七八九十百千万零两]+\s*(?:章|回).*)|(?<plain_digit_title>第\s*[0-9０-９]+\s*(?:章|回).*)|(?<plain_chinese_title>第\s*[一二三四五六七八九十百千万零两]+\s*(?:章|回)(?:\s*$|[\s：:].*))|(?<numbered_title>[一二三四五六七八九十百千万零两]{1,4}\s*[、.．]\s*\S.{0,120}))\s*$/;
 
 interface LineRecord {
   line_number: number;
@@ -22,7 +22,7 @@ export class Chapterizer {
     records.forEach((record, index) => {
       const match = CHAPTER_TITLE_RE.exec(record.text);
       if (!match?.groups) return;
-      const title = (match.groups.marked_title || match.groups.plain_digit_title || match.groups.plain_chinese_title || '').trim();
+      const title = (match.groups.marked_title || match.groups.plain_digit_title || match.groups.plain_chinese_title || match.groups.numbered_title || '').trim();
       candidates.push({
         candidate_id: `t${String(candidates.length + 1).padStart(4, '0')}`,
         line_number: record.line_number,
@@ -44,19 +44,34 @@ export class Chapterizer {
       return [{ chapter_id: 1, title: '正文', start: 0, end: text.length, text }];
     }
 
-    return matches.map((match, index) => {
+    const chapters: Chapter[] = [];
+    const preface = text.slice(0, matches[0].start).replace(/[\r\n]+$/, '');
+    if (preface.trim()) {
+      chapters.push({
+        chapter_id: chapters.length + 1,
+        title: '前言',
+        start: 0,
+        end: preface.length,
+        text: preface,
+        skip_llm: true,
+        skip_reason: 'content before first recognized chapter title is treated as narration',
+      });
+    }
+
+    matches.forEach((match, index) => {
       const bodyEnd = index + 1 < matches.length ? matches[index + 1].start : text.length;
       const rawChapterText = text.slice(match.end, bodyEnd);
       const chapterText = rawChapterText.replace(/^[\r\n]+/, '');
       const trim = bodyEnd - chapterText.length;
-      return {
-        chapter_id: index + 1,
+      chapters.push({
+        chapter_id: chapters.length + 1,
         title: match.title,
         start: trim,
         end: bodyEnd,
         text: chapterText,
-      };
+      });
     });
+    return chapters;
   }
 }
 
@@ -113,6 +128,7 @@ const NOISE_PATTERNS = [
   /img\s+data-ywcc-[^>]*>?/gis,
   /data-ywcc-(?:imgId|path)\s*=\s*"[^"]*"/gi,
   /https?:\/\/[^\s<>"'\]]+/gi,
+  /\b(?:www\.)?[A-Za-z0-9-]+(?:\.(?:com\.cn|com|net|org|cn|edu|gov|info|io|co|me|tv|cc|top|xyz))(?:\/[^\s<>"'\]]*)?/gi,
   /\/\S*\.(?:jpg|jpeg|png|gif|webp|svg|bmp)(?:["'\s>]|$)/gi,
   /<[^>]+>/gis,
 ];

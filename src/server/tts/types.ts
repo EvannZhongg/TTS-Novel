@@ -88,6 +88,8 @@ export interface Chapter {
   start: number;
   end: number;
   text: string;
+  skip_llm?: boolean;
+  skip_reason?: string;
 }
 
 export interface TextPreprocessResult {

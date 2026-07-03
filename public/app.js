@@ -35,6 +35,7 @@ const FRONTEND_NOISE_PATTERNS = [
   /img\s+data-ywcc-[^>]*>?/gis,
   /data-ywcc-(?:imgId|path)\s*=\s*"[^"]*"/gi,
   /https?:\/\/[^\s<>"'\]]+/gi,
+  /\b(?:www\.)?[A-Za-z0-9-]+(?:\.(?:com\.cn|com|net|org|cn|edu|gov|info|io|co|me|tv|cc|top|xyz))(?:\/[^\s<>"'\]]*)?/gi,
   /\/\S*\.(?:jpg|jpeg|png|gif|webp|svg|bmp)(?:["'\s>]|$)/gi,
   /<[^>]+>/gis,
 ];
@@ -454,7 +455,11 @@ function rebuildTextFromPipelineResult(result) {
 }
 
 function isAlreadyDisplayMappedResult(result) {
-  if (result?.frontend_coordinate_basis === 'source_text_v2' || result?.frontend_coordinate_basis === 'synthetic_text_v2') return true;
+  if (result?.frontend_coordinate_basis === 'source_text_v2') return false;
+  if (
+    result?.frontend_coordinate_basis === 'cleaned_display_text_v3'
+    || result?.frontend_coordinate_basis === 'synthetic_text_v2'
+  ) return true;
   return (result?.chapters || []).some((chapter) =>
     chapter?.display_body_start !== undefined
     && (chapter?.display_body_end !== undefined || chapter?.display_title_line !== undefined)
@@ -468,16 +473,13 @@ function rebuildTextFromPipelineResultOnSource(cloned, sourceText) {
   const originalLineOffsets = computeLineOffsets(preprocessedSource);
   const context = buildChapterDisplayMappingContext(cloned, preprocessedSource, originalLineOffsets);
   cloned.chapters = (cloned.chapters || []).map((chapter) => mapChapterToDisplaySource(chapter, context));
-  cloned.frontend_coordinate_basis = 'source_text_v2';
+  cloned.frontend_coordinate_basis = 'cleaned_display_text_v3';
   return { text: preprocessedSource, result: cloned };
 }
 
 function preprocessForDisplaySource(text, preprocessing = {}) {
-  // Keep the same coordinate basis as backend pre-chapter preprocessing.
-  // The browser already normalizes CR/LF, BOM and NUL on upload; applying the
-  // same cheap normalization here keeps chapter.start/end aligned with raw job
-  // metadata before progressive chunks arrive.
-  return normalizeNewlines(text);
+  const normalized = normalizeNewlines(text);
+  return stripFrontendNoiseRegionsWithMap(normalized, 0).text;
 }
 
 function buildChapterDisplayMappingContext(result, displayText, lineOffsets) {
@@ -488,7 +490,7 @@ function buildChapterDisplayMappingContext(result, displayText, lineOffsets) {
   const titleOccupied = [];
   ordered.forEach((chapter) => {
     const title = String(chapter.title || '').trim();
-    const originalStart = Number(chapter.start || 0);
+    const originalStart = Number(chapter.source_start ?? chapter.start ?? 0);
     const hintedLocation = findBestChapterTitleHint({ chapter, titleHints, usedTitleHintIds, displayText });
     const location = hintedLocation || findChapterTitleInDisplaySource(displayText, title, originalStart, titleOccupied);
     if (location) {
@@ -501,8 +503,8 @@ function buildChapterDisplayMappingContext(result, displayText, lineOffsets) {
   const bodyBounds = new Map();
   ordered.forEach((chapter, index) => {
     const titleLocation = titleLocations.get(chapter.chapter_id) || null;
-    const originalStart = clampOffset(chapter.start, displayText.length);
-    const originalEnd = clampOffset(chapter.end ?? originalStart, displayText.length);
+    const originalStart = clampOffset(chapter.source_start ?? chapter.start, displayText.length);
+    const originalEnd = clampOffset(chapter.source_end ?? chapter.end ?? originalStart, displayText.length);
     const nextChapter = ordered[index + 1];
     const nextTitleLocation = nextChapter ? titleLocations.get(nextChapter.chapter_id) : null;
     const bodyStart = titleLocation ? skipLineBreaks(displayText, titleLocation.end) : originalStart;
@@ -550,7 +552,7 @@ function buildChapterTitleLineHints(result, displayText, lineOffsets) {
 function findBestChapterTitleHint({ chapter, titleHints, usedTitleHintIds, displayText }) {
   if (!titleHints.length) return null;
   const chapterTitle = normalizeTitleForMatching(chapter.title);
-  const originalStart = Number(chapter.start || 0);
+  const originalStart = Number(chapter.source_start ?? chapter.start ?? 0);
   const candidates = titleHints
     .filter((hint) => !usedTitleHintIds.has(hint.id))
     .map((hint) => {
@@ -605,8 +607,8 @@ function mapChapterToDisplaySource(chapter, context) {
   mapped.display_title_line = offsetToLineNumber(mapped.display_title_start, lineOffsets, displayText.length);
   mapped.display_body_start = bodyStart;
   mapped.display_body_end = bodyEnd;
-  mapped.source_start = mapped.start;
-  mapped.source_end = mapped.end;
+  mapped.source_start = mapped.source_start ?? mapped.start;
+  mapped.source_end = mapped.source_end ?? mapped.end;
   mapped.start = bodyStart;
   mapped.end = bodyEnd;
   mapped.chunks = (mapped.chunks || []).map((chunk) => mapChunkToDisplaySource(chunk, bodyStart, bodyEnd, displayText, cleanMap));
@@ -873,8 +875,8 @@ function mapCleanedOffsetToDisplay(cleanMap, offset, edge = 'start') {
 function mapChunkToDisplaySource(chunk, bodyStart, bodyEnd, displayText, cleanMap) {
   const mapped = { ...chunk };
   const chunkText = String(mapped.text || '');
-  const originalStart = Number(mapped.start || 0);
-  const originalEnd = Number(mapped.end ?? mapped.start ?? 0);
+  const originalStart = Number(mapped.clean_start ?? mapped.start ?? 0);
+  const originalEnd = Number(mapped.clean_end ?? mapped.end ?? mapped.clean_start ?? mapped.start ?? 0);
   let displayStart = mapCleanedOffsetToDisplay(cleanMap, originalStart, 'start');
   let displayEnd = mapCleanedOffsetToDisplay(cleanMap, originalEnd, 'end');
   if (chunkText) {
@@ -888,8 +890,8 @@ function mapChunkToDisplaySource(chunk, bodyStart, bodyEnd, displayText, cleanMa
   displayEnd = clampOffset(Math.max(displayEnd, displayStart), displayText.length);
   mapped.display_start = displayStart;
   mapped.display_end = displayEnd;
-  mapped.clean_start = mapped.start;
-  mapped.clean_end = mapped.end;
+  mapped.clean_start = originalStart;
+  mapped.clean_end = originalEnd;
   mapped.start = displayStart;
   mapped.end = displayEnd;
   remapChunkSpanOffsets(mapped, cleanMap, originalStart, bodyStart, bodyEnd, displayText);
@@ -936,8 +938,11 @@ function remapSpanOffset(span, cleanMap, offsetBase, bodyStart, bodyEnd, display
   const originalStart = Number(span.start);
   const originalEnd = Number(span.end);
   if (!Number.isFinite(originalStart) || !Number.isFinite(originalEnd)) return;
-  const cleanStart = offsetBase + originalStart;
-  const cleanEnd = offsetBase + originalEnd;
+  const savedCleanStart = Number(span.clean_start);
+  const savedCleanEnd = Number(span.clean_end);
+  const hasSavedCleanOffsets = Number.isFinite(savedCleanStart) && Number.isFinite(savedCleanEnd);
+  const cleanStart = hasSavedCleanOffsets ? savedCleanStart : offsetBase + originalStart;
+  const cleanEnd = hasSavedCleanOffsets ? savedCleanEnd : offsetBase + originalEnd;
   let start = mapCleanedOffsetToDisplay(cleanMap, cleanStart, 'start');
   let end = mapCleanedOffsetToDisplay(cleanMap, cleanEnd, 'end');
   const query = String(span.text || span.dialogue_text || '').trim();
@@ -960,8 +965,8 @@ function remapChapterTtsSegments(chapter, bodyStart, bodyEnd, displayText, clean
   if (!Array.isArray(chapter.tts_segments)) return;
   chapter.tts_segments = chapter.tts_segments.map((segment) => {
     const mapped = { ...segment };
-    const originalStart = Number(mapped.start || 0);
-    const originalEnd = Number(mapped.end ?? mapped.start ?? 0);
+    const originalStart = Number(mapped.clean_start ?? mapped.start ?? 0);
+    const originalEnd = Number(mapped.clean_end ?? mapped.end ?? mapped.clean_start ?? mapped.start ?? 0);
     const segmentText = String(mapped.text || '');
     let displayStart = mapCleanedOffsetToDisplay(cleanMap, originalStart, 'start');
     let displayEnd = mapCleanedOffsetToDisplay(cleanMap, originalEnd, 'end');
@@ -972,8 +977,8 @@ function remapChapterTtsSegments(chapter, bodyStart, bodyEnd, displayText, clean
         displayEnd = found + segmentText.length;
       }
     }
-    mapped.clean_start = mapped.start;
-    mapped.clean_end = mapped.end;
+    mapped.clean_start = originalStart;
+    mapped.clean_end = originalEnd;
     mapped.display_start = clampOffset(displayStart, displayText.length);
     mapped.display_end = clampOffset(Math.max(displayEnd, displayStart), displayText.length);
     mapped.start = mapped.display_start;
@@ -2421,7 +2426,7 @@ function buildAnalysisExportPackage() {
 
 function buildCoordinateSystemsMetadata() {
   return {
-    normalized_text: 'input.normalized_text，前端统一换行后的分析文本。所有 display_* 坐标均以此文本为可视化基准。',
+    normalized_text: 'input.normalized_text，前端统一换行并移除 URL/裸域名等噪声后的分析展示文本。所有 display_* 坐标均以此文本为可视化基准。',
     cleaned_chapter_text: '后端对单章正文执行 cleanChapterText 后的文本；chunk.text、chunk.clean_start/clean_end、span.clean_start/clean_end 基于该清洗后章节正文。',
     result_coordinate_basis: state.result?.frontend_coordinate_basis || 'unknown',
     fields: {

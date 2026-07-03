@@ -252,6 +252,62 @@ frontend_result.json      # 前端分析包
 error.json                # 失败信息
 ```
 
+注意：Vercel 的 `/tmp` 不是持久化存储，只适合演示和短期轮询。长期保存建议接入 Vercel Blob、KV、Postgres 或对象存储。
+
+## 导出 JSON 格式
+
+前端导出的文件使用 schema：
+
+```text
+tts_pipeline_analysis_v1
+```
+
+顶层结构：
+
+```json
+{
+  "schema_version": "tts_pipeline_analysis_v1",
+  "exported_at": "2026-07-03T00:00:00.000Z",
+  "source": "frontend_demo",
+  "job": {
+    "job_id": "...",
+    "status": "completed",
+    "stage": "completed",
+    "message": "...",
+    "created_at": "...",
+    "started_at": "...",
+    "completed_at": "...",
+    "request_summary": {},
+    "storage": {}
+  },
+  "input": {
+    "file_name": "...",
+    "book_title": "...",
+    "normalized_text": "...",
+    "normalized_text_chars": 0,
+    "normalized_line_count": 0
+  },
+  "coordinate_systems": {
+    "normalized_text": "...",
+    "cleaned_chapter_text": "...",
+    "result_coordinate_basis": "source_text_v2",
+    "fields": {}
+  },
+  "analysis_summary": {
+    "chapter_count": 0,
+    "chunk_count": 0,
+    "span_count": 0,
+    "grounded_count": 0,
+    "tts_segment_count": 0
+  },
+  "result": {},
+  "logs": [],
+  "error": null
+}
+```
+
+导入 JSON 只接受该新格式，不兼容旧的裸 `result` JSON。
+
 ### 坐标说明
 
 导出包内会写入 `coordinate_systems.fields`，用于解释各类坐标字段。核心规则：

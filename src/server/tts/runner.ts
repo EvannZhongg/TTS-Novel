@@ -194,6 +194,33 @@ export class PipelineRunner {
     const chapterResult: AnyRecord = { chapter_id: chapter.chapter_id, title: chapter.title, start: chapter.start, end: chapter.end, cleaned_text: chapterText, char_count: chapterText.length, original_char_count: chapter.text.length, preprocessing: chapterCleaning.stats, aliases: [], chunks: [] };
     let chapterAliases: AnyRecord[] = [];
     this.emitProgress('chapter_processing', '章节清洗和 chunk 切分完成', { chapter_id: chapter.chapter_id, title: chapter.title, chunk_count: chunks.length });
+    if (chapter.skip_llm) {
+      chapterResult.llm_skipped = true;
+      chapterResult.skip_reason = chapter.skip_reason || 'chapter configured to skip LLM extraction';
+      chapterResult.chunks = chunks.map((chunk) => ({
+        chunk_id: chunk.chunk_id,
+        start: chunk.start,
+        end: chunk.end,
+        text: chunk.text,
+        text_preview: chunk.text.slice(0, 300),
+        llm_skipped: true,
+        skip_reason: chapterResult.skip_reason,
+        llm_result: { dialogue_spans: [], aliases: [] },
+        quote_span_candidates: [],
+        missed_quote_span_candidates: [],
+        quote_recovery_result: { candidates: [], aliases: [], skipped: true },
+        quote_recovery_llm_result: { dialogue_spans: [], aliases: [] },
+        quote_boundary_repairs: [],
+        recovered_grounded_dialogue_spans: [],
+        quote_recovery_superseded_spans: [],
+        grounded_dialogue_spans: [],
+        final_grounded_dialogue_spans: [],
+        grounding_summary: groundingSummary([]),
+        final_grounding_summary: groundingSummary([]),
+      }));
+      this.emitProgress('chapter_processing', '章节配置为旁白，跳过 LLM span 抽取', { chapter_id: chapter.chapter_id, title: chapter.title, chunk_count: chunks.length });
+      return chapterResult;
+    }
 
     const pendingQuoteRecovery: AnyRecord[] = [];
     for (const chunk of chunks) {

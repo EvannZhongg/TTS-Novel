@@ -25,6 +25,7 @@ const SAMPLE_TEXT = `第一卷 青春试音
 “明天见。”`;
 
 const STORAGE_KEY = 'tts_pipeline_demo_last_result_v1';
+const ANALYSIS_EXPORT_SCHEMA_VERSION = 'tts_pipeline_analysis_v1';
 const AUTO_DOWNLOAD_JSON = false;
 const JOB_LOG_FETCH_LIMIT = 5000;
 const JOB_LOG_RENDER_LIMIT = 300;
@@ -58,6 +59,8 @@ const state = {
   candidateFilter: 'all',
   jobId: null,
   jobLogs: [],
+  jobMeta: null,
+  jobError: null,
   progressiveResult: null,
   completedChapterIds: new Set(),
 };
@@ -346,6 +349,8 @@ function applyTextFromModal() {
   state.candidateFilter = 'all';
   state.jobId = null;
   state.jobLogs = [];
+  state.jobMeta = null;
+  state.jobError = null;
   state.progressiveResult = null;
   state.completedChapterIds = new Set();
   updateInputStats();
@@ -365,17 +370,47 @@ async function importResultJson() {
   if (!file) return;
   try {
     const text = await file.text();
-    const parsed = JSON.parse(text);
-    state.jobId = parsed.job_id || parsed.jobId || null;
-    state.jobLogs = [];
-    loadPipelineResult(parsed.result && Array.isArray(parsed.result.chapters) ? parsed.result : parsed, { fileName: file.name, persist: true });
+    const analysisPackage = validateAnalysisPackage(JSON.parse(text));
+    const normalizedText = normalizeNewlines(analysisPackage.input.normalized_text);
+    state.fileName = analysisPackage.input.file_name || file.name;
+    state.rawText = normalizedText;
+    state.text = normalizedText;
+    state.normalizedText = normalizedText;
+    state.lines = splitLinesKeepingEmpty(normalizedText);
+    state.lineOffsets = computeLineOffsets(normalizedText);
+    state.jobId = analysisPackage.job?.job_id || null;
+    state.jobLogs = analysisPackage.logs;
+    state.jobMeta = analysisPackage.job || null;
+    state.jobError = analysisPackage.error || null;
+    if (analysisPackage.input.book_title) els.bookTitleInput.value = analysisPackage.input.book_title;
+    loadPipelineResult(analysisPackage.result, { fileName: state.fileName, persist: true });
     renderRuntimeLogs();
-    setStatus(`已导入 pipeline JSON：${file.name}`, 'ok');
+    setStatus(`已导入 pipeline 分析 JSON：${file.name}`, 'ok');
   } catch (error) {
     setStatus(`导入 JSON 失败：${error.message}`, 'error');
   } finally {
     els.importJsonInput.value = '';
   }
+}
+
+function validateAnalysisPackage(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('不是有效的 pipeline 分析 JSON：根节点必须是对象');
+  }
+  if (value.schema_version !== ANALYSIS_EXPORT_SCHEMA_VERSION) {
+    throw new Error(`不支持的 schema_version：${value.schema_version || 'missing'}`);
+  }
+  if (!value.input || typeof value.input.normalized_text !== 'string') {
+    throw new Error('不是有效的 pipeline 分析 JSON：缺少 input.normalized_text');
+  }
+  if (!value.result || !Array.isArray(value.result.chapters)) {
+    throw new Error('不是有效的 pipeline 分析 JSON：缺少 result.chapters');
+  }
+  return {
+    ...value,
+    logs: Array.isArray(value.logs) ? value.logs : [],
+    error: value.error ?? null,
+  };
 }
 
 function loadPipelineResult(result, { fileName = '导入 JSON', persist = false } = {}) {
@@ -1024,6 +1059,9 @@ function saveLastResult() {
       text: state.text,
       result: state.result,
       jobId: state.jobId,
+      jobMeta: state.jobMeta,
+      jobError: state.jobError,
+      jobLogs: state.jobLogs,
     }));
   } catch (_) {
     // localStorage may be unavailable or quota-limited; export JSON still works.
@@ -1038,6 +1076,9 @@ function restoreLastResult() {
     if (!saved?.result || !saved?.text) return;
     state.fileName = saved.fileName || '本地缓存';
     state.jobId = saved.jobId || saved.job_id || saved.result?.job_id || null;
+    state.jobMeta = saved.jobMeta || null;
+    state.jobError = saved.jobError || null;
+    state.jobLogs = Array.isArray(saved.jobLogs) ? saved.jobLogs : [];
     state.rawText = saved.rawText || saved.raw_text || saved.text || '';
     state.text = saved.text;
     state.normalizedText = normalizeNewlines(saved.text);
@@ -1084,6 +1125,8 @@ async function runFullPipeline() {
   state.selectedSpanKey = null;
   state.jobId = null;
   state.jobLogs = [];
+  state.jobMeta = null;
+  state.jobError = null;
   state.progressiveResult = null;
   state.completedChapterIds = new Set();
   updateResultStats();
@@ -1112,10 +1155,13 @@ async function runFullPipeline() {
     }
     const created = await createResponse.json();
     state.jobId = created.job_id;
+    state.jobMeta = pickJobMetadata(created);
+    state.jobError = null;
     updateJobIdDisplay();
     setStatus(`Pipeline job 已创建：${state.jobId}，正在轮询进度...`, '');
     await pollPipelineJob(base, state.jobId);
   } catch (error) {
+    state.jobError = { message: error.message };
     setPipelineStep(1);
     setStatus(`Pipeline 失败：${error.message}`, 'error');
   } finally {
@@ -1138,6 +1184,8 @@ async function pollPipelineJob(base, jobId) {
 
     const job = await response.json();
     state.jobLogs = job.logs || [];
+    state.jobMeta = pickJobMetadata(job);
+    state.jobError = job.error ? { message: job.error, stage: job.stage || 'failed' } : null;
     applyProgressivePipelineResult(job.partial_result, job);
     updateStageFromJob(job);
     renderRuntimeLogs();
@@ -1147,6 +1195,8 @@ async function pollPipelineJob(base, jobId) {
       const completedJob = await fetchPipelineJobResult(base, jobId);
       if (state.jobId !== jobId) return;
       state.jobLogs = completedJob.logs || state.jobLogs;
+      state.jobMeta = pickJobMetadata(completedJob);
+      state.jobError = completedJob.error ? { message: completedJob.error, stage: completedJob.stage || 'completed' } : null;
       loadPipelineResult(completedJob.result, { fileName: state.fileName || 'pipeline result', persist: false });
       const persistedStorage = await persistCompletedResult(base, jobId);
       if (persistedStorage) completedJob.storage = { ...(completedJob.storage || {}), ...persistedStorage };
@@ -1168,12 +1218,32 @@ async function pollPipelineJob(base, jobId) {
     }
 
     if (job.status === 'failed') {
+      state.jobError = {
+        message: job.error || job.message || 'pipeline job failed',
+        status: job.status,
+        stage: job.stage || 'failed',
+      };
       renderRuntimeLogs();
       throw new Error(job.error || job.message || 'pipeline job failed');
     }
 
     await sleep(900);
   }
+}
+
+function pickJobMetadata(job = {}) {
+  if (!job || typeof job !== 'object') return null;
+  return {
+    job_id: job.job_id || state.jobId || null,
+    status: job.status ?? null,
+    stage: job.stage ?? null,
+    message: job.message ?? null,
+    created_at: job.created_at ?? null,
+    started_at: job.started_at ?? null,
+    completed_at: job.completed_at ?? null,
+    request_summary: job.request_summary ?? null,
+    storage: job.storage ?? null,
+  };
 }
 
 
@@ -1258,6 +1328,7 @@ async function fetchPipelineJobResult(base, jobId) {
 async function persistCompletedResult(base, jobId) {
   if (!state.result) return null;
   if (jobId) state.result.job_id = state.result.job_id || jobId;
+  const analysisPackage = buildAnalysisExportPackage();
   try {
     if (!jobId) throw new Error('missing job id');
     const response = await fetch(`${base}/api/v1/pipeline/jobs/${jobId}/frontend-result`, {
@@ -1265,7 +1336,7 @@ async function persistCompletedResult(base, jobId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         source: 'frontend_demo',
-        result: state.result,
+        result: analysisPackage,
       }),
     });
     if (!response.ok) {
@@ -2295,15 +2366,79 @@ function getSourceBasisLength() {
 
 function exportResultJson() {
   if (!state.result) return;
-  const blob = new Blob([JSON.stringify(state.result, null, 2)], { type: 'application/json;charset=utf-8' });
+  const blob = new Blob([JSON.stringify(buildAnalysisExportPackage(), null, 2)], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `${els.bookTitleInput.value || 'pipeline-result'}.pipeline.json`;
+  anchor.download = `${els.bookTitleInput.value || 'pipeline-result'}.pipeline-analysis.json`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+}
+
+function buildAnalysisExportPackage() {
+  if (!state.result) throw new Error('没有可导出的 pipeline result');
+  const normalizedText = normalizeNewlines(state.normalizedText || state.text || state.rawText || '');
+  const summary = getPipelineSummary();
+  return {
+    schema_version: ANALYSIS_EXPORT_SCHEMA_VERSION,
+    exported_at: new Date().toISOString(),
+    source: 'frontend_demo',
+    job: {
+      ...(state.jobMeta || {}),
+      job_id: state.jobId || state.jobMeta?.job_id || state.result?.job_id || null,
+    },
+    input: {
+      file_name: state.fileName || '',
+      book_title: els.bookTitleInput.value.trim() || state.result?.book_title || '',
+      normalized_text: normalizedText,
+      normalized_text_chars: normalizedText.length,
+      normalized_line_count: normalizedText ? splitLinesKeepingEmpty(normalizedText).length : 0,
+    },
+    coordinate_systems: buildCoordinateSystemsMetadata(),
+    analysis_summary: {
+      chapter_count: summary.chapterCount,
+      chunk_count: summary.chunkCount,
+      span_count: summary.spanCount,
+      primary_span_count: summary.primarySpanCount,
+      recovered_span_count: summary.recoveredSpanCount,
+      grounded_count: summary.groundedCount,
+      unresolved_count: summary.unresolvedCount,
+      quote_candidate_count: summary.quoteCandidateCount,
+      missed_quote_count: summary.missedQuoteCount,
+      tts_segment_count: summary.ttsSegmentCount,
+      tts_narration_segment_count: summary.ttsNarrationSegmentCount,
+      tts_dialogue_segment_count: summary.ttsDialogueSegmentCount,
+      tts_skipped_span_count: summary.ttsSkippedSpanCount,
+      tts_coverage_ok: summary.ttsCoverageOk,
+    },
+    result: state.result,
+    logs: state.jobLogs || [],
+    error: state.jobError || null,
+  };
+}
+
+function buildCoordinateSystemsMetadata() {
+  return {
+    normalized_text: 'input.normalized_text，前端统一换行后的分析文本。所有 display_* 坐标均以此文本为可视化基准。',
+    cleaned_chapter_text: '后端对单章正文执行 cleanChapterText 后的文本；chunk.text、chunk.clean_start/clean_end、span.clean_start/clean_end 基于该清洗后章节正文。',
+    result_coordinate_basis: state.result?.frontend_coordinate_basis || 'unknown',
+    fields: {
+      'chapter.source_start/source_end': '后端拆章后的章节正文在 cleanBeforeChapterSplit 文本中的原始坐标；仅前端重映射后存在。',
+      'chapter.start/end': '当前前端展示坐标；导出时通常等同于 chapter.display_body_start/display_body_end。',
+      'chapter.display_title_start/display_title_end': '章节标题在 input.normalized_text 中的展示坐标。',
+      'chapter.display_body_start/display_body_end': '章节正文在 input.normalized_text 中的展示坐标。',
+      'chunk.clean_start/clean_end': 'chunk 在 cleaned_chapter_text 中的坐标。',
+      'chunk.display_start/display_end': 'chunk 在 input.normalized_text 中的展示坐标。',
+      'chunk.start/end': '当前前端展示坐标；导出时通常等同于 chunk.display_start/display_end。',
+      'span.clean_start/clean_end': 'span 在 cleaned_chapter_text 中的坐标。',
+      'span.display_start/display_end': 'span 在 input.normalized_text 中的展示坐标。',
+      'span.start/end': '当前前端展示坐标；导出时通常等同于 span.display_start/display_end。',
+      'tts_segment.display_start/display_end': 'TTS segment 在 input.normalized_text 中的展示坐标。',
+      'tts_segment.start/end': '当前前端展示坐标；导出时通常等同于 tts_segment.display_start/display_end。',
+    },
+  };
 }
 
 function formatBytes(bytes) {

@@ -169,7 +169,15 @@ export async function getPipelineJobLogs(jobId: string, tail: number): Promise<A
 export async function savePipelineJobFrontendResult(jobId: string, request: { result: AnyRecord; source?: string }): Promise<AnyRecord | null> {
   const job = PIPELINE_JOBS.get(jobId) ?? (await JOB_STORE.getJob(jobId, { includeLogs: false, includeResult: false }));
   if (!job) return null;
-  const payload = { job_id: jobId, saved_at: nowIso(), source: request.source || 'frontend', result: request.result };
+  const payload = {
+    ...request.result,
+    saved_at: nowIso(),
+    source: request.source || request.result.source || 'frontend',
+    job: {
+      ...(request.result.job || {}),
+      job_id: jobId,
+    },
+  };
   const storage = await JOB_STORE.saveFrontendResult(jobId, payload);
   job.storage = storage;
   if (PIPELINE_JOBS.has(jobId)) PIPELINE_JOBS.get(jobId)!.storage = storage;

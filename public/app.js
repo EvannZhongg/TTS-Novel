@@ -552,16 +552,15 @@ function buildChapterTitleLineHints(result, displayText, lineOffsets) {
 function findBestChapterTitleHint({ chapter, titleHints, usedTitleHintIds, displayText }) {
   if (!titleHints.length) return null;
   const chapterTitle = normalizeTitleForMatching(chapter.title);
-  const originalStart = Number(chapter.source_start ?? chapter.start ?? 0);
   const candidates = titleHints
     .filter((hint) => !usedTitleHintIds.has(hint.id))
+    .filter((hint) => chapterTitle && titleHintMatchesChapter(hint, chapterTitle))
     .map((hint) => {
-      const titleMatches = chapterTitle && titleHintMatchesChapter(hint, chapterTitle);
+      const originalStart = Number(chapter.source_start ?? chapter.start ?? 0);
       const distance = Math.abs(Number(hint.body_start || hint.end) - originalStart);
       return {
         hint,
         score: [
-          titleMatches ? 0 : 1,
           distance,
           hint.start,
         ],
@@ -570,13 +569,7 @@ function findBestChapterTitleHint({ chapter, titleHints, usedTitleHintIds, displ
     .sort((a, b) => a.score[0] - b.score[0] || a.score[1] - b.score[1] || a.score[2] - b.score[2]);
   const best = candidates[0];
   if (!best) return null;
-  // Prefer LLM/title-validation line hints for marker-prefixed titles such as
-  // "§§§第1章"; fall back to substring search only when the hint is clearly far
-  // away and the title text does not match.
-  if (best.score[0] === 0 || best.score[1] <= 500) {
-    return { start: best.hint.start, end: best.hint.end, hint_id: best.hint.id };
-  }
-  return null;
+  return { start: best.hint.start, end: best.hint.end, hint_id: best.hint.id };
 }
 
 function titleHintMatchesChapter(hint, normalizedChapterTitle) {
@@ -588,6 +581,7 @@ function normalizeTitleForMatching(value) {
   return String(value || '')
     .trim()
     .replace(/^§+/, '')
+    .replace(/^#{1,6}\s*/, '')
     .replace(/\s+/g, '')
     .trim();
 }

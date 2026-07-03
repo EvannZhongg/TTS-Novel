@@ -6,7 +6,7 @@ import type {
   TextPreprocessResult,
 } from './types';
 
-const CHAPTER_TITLE_RE = /^\s*(?:§{2,}\s*(?<marked_title>第\s*[0-9０-９一二三四五六七八九十百千万零两]+\s*(?:章|回).*)|(?<plain_digit_title>第\s*[0-9０-９]+\s*(?:章|回).*)|(?<plain_chinese_title>第\s*[一二三四五六七八九十百千万零两]+\s*(?:章|回)(?:\s*$|[\s：:].*))|(?<numbered_title>[一二三四五六七八九十百千万零两]{1,4}\s*[、.．]\s*\S.{0,120}))\s*$/;
+const CHAPTER_TITLE_RE = /^\s*(?:(?<markdown_title>#{1,3}(?!#)\s*\S.{0,120})|§{2,}\s*(?<marked_title>第\s*[0-9０-９一二三四五六七八九十百千万零两]+\s*(?:章|回).*)|(?<plain_digit_title>第\s*[0-9０-９]+\s*(?:章|回).*)|(?<plain_chinese_title>第\s*[一二三四五六七八九十百千万零两]+\s*(?:章|回)(?:\s*$|[\s：:].*))|(?<numbered_title>[一二三四五六七八九十百千万零两]{1,4}\s*[、.．]\s*\S.{0,120}))\s*$/;
 
 interface LineRecord {
   line_number: number;
@@ -22,7 +22,7 @@ export class Chapterizer {
     records.forEach((record, index) => {
       const match = CHAPTER_TITLE_RE.exec(record.text);
       if (!match?.groups) return;
-      const title = (match.groups.marked_title || match.groups.plain_digit_title || match.groups.plain_chinese_title || match.groups.numbered_title || '').trim();
+      const title = normalizeChapterTitle(match.groups.markdown_title || match.groups.marked_title || match.groups.plain_digit_title || match.groups.plain_chinese_title || match.groups.numbered_title || '');
       candidates.push({
         candidate_id: `t${String(candidates.length + 1).padStart(4, '0')}`,
         line_number: record.line_number,
@@ -73,6 +73,10 @@ export class Chapterizer {
     });
     return chapters;
   }
+}
+
+function normalizeChapterTitle(title: string): string {
+  return (title || '').trim().replace(/^#{1,3}(?!#)\s*/, '').trim();
 }
 
 function lineRecords(text: string): LineRecord[] {

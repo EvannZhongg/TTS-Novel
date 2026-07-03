@@ -10,6 +10,18 @@ export class LLMJsonParseError extends Error {
   }
 }
 
+export class LLMUpstreamResponseError extends Error {
+  constructor(
+    message: string,
+    readonly responseBody: string,
+    readonly metadata: { status: number; statusText: string; contentType: string; requestId: string },
+    readonly causeError?: unknown,
+  ) {
+    super(message);
+    this.name = 'LLMUpstreamResponseError';
+  }
+}
+
 export function createLLMClient(settings: LLMSettings): LLMClient {
   const provider = settings.provider.toLowerCase().trim();
   if (['openai', 'openai_compatible', 'compatible'].includes(provider)) return new OpenAICompatibleLLMClient(settings);
@@ -65,14 +77,33 @@ export class OpenAICompatibleLLMClient implements LLMClient {
     } finally {
       clearTimeout(timeout);
     }
+    const responseBody = await response.text();
     if (!response.ok) {
-      const bodyPreview = (await response.text()).slice(0, this.settings.logFailedResponseChars);
-      throw new Error(`OpenAI-compatible HTTP ${response.status}: ${bodyPreview}`);
+      throw this.createUpstreamResponseError(response, responseBody, `OpenAI-compatible HTTP ${response.status}`);
     }
-    const data = (await response.json()) as AnyRecord;
+    if (!responseBody.trim()) {
+      throw this.createUpstreamResponseError(response, responseBody, `OpenAI-compatible response body is empty (HTTP ${response.status})`);
+    }
+    let data: AnyRecord;
+    try {
+      data = JSON.parse(responseBody) as AnyRecord;
+    } catch (error) {
+      throw this.createUpstreamResponseError(response, responseBody, `OpenAI-compatible response JSON parse failed: ${error instanceof Error ? error.message : String(error)}`, error);
+    }
     const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== 'string') throw new Error(`Invalid OpenAI-compatible response: ${JSON.stringify(data).slice(0, 500)}`);
+    if (typeof content !== 'string') throw this.createUpstreamResponseError(response, responseBody, 'Invalid OpenAI-compatible response: missing choices[0].message.content');
     return content;
+  }
+
+  private createUpstreamResponseError(response: Response, responseBody: string, message: string, causeError?: unknown): LLMUpstreamResponseError {
+    const contentType = response.headers.get('content-type') || '';
+    const requestId =
+      response.headers.get('x-request-id') ||
+      response.headers.get('x-tt-logid') ||
+      response.headers.get('x-trace-id') ||
+      response.headers.get('trace-id') ||
+      '';
+    return new LLMUpstreamResponseError(message, responseBody, { status: response.status, statusText: response.statusText, contentType, requestId }, causeError);
   }
 
   private retrySleepSeconds(attempt: number): number {
@@ -81,10 +112,16 @@ export class OpenAICompatibleLLMClient implements LLMClient {
 
   private logFailure(attempt: number, attempts: number, error: unknown, content: string): void {
     const err = error instanceof Error ? error : new Error(String(error));
-    const rawContent = error instanceof LLMJsonParseError ? error.content : content;
+    const rawContent = error instanceof LLMJsonParseError ? error.content : error instanceof LLMUpstreamResponseError ? error.responseBody : content;
     const normalizedContent = error instanceof LLMJsonParseError ? error.normalizedContent : content;
     const preview = (rawContent || '').slice(0, Math.max(0, this.settings.logFailedResponseChars));
     console.error(`[llm] request failed attempt=${attempt}/${attempts} model=${this.settings.model} error_type=${err.name} error=${err.message}`);
+    if (error instanceof LLMUpstreamResponseError) {
+      console.error(
+        `[llm-upstream-response] status=${error.metadata.status} status_text=${JSON.stringify(error.metadata.statusText)} content_type=${JSON.stringify(error.metadata.contentType)} request_id=${JSON.stringify(error.metadata.requestId)}`,
+      );
+      if (error.causeError) console.error(`[llm-upstream-response] parse_error=${error.causeError instanceof Error ? error.causeError.message : String(error.causeError)}`);
+    }
     if (preview) console.error(`[llm] failed response preview begin\n${preview}\n[llm] failed response preview end`);
     else console.error('[llm] failed response preview is empty');
     if (error instanceof LLMJsonParseError) {

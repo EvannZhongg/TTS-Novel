@@ -1,5 +1,5 @@
 import { handleRoute, notFound, requireOwnedProject, searchEmail } from '@/src/server/api/helpers';
-import { getChapter, mergeChapterResult } from '@/src/server/db/chapters';
+import { getAdjacentChapters, getChapter, mergeChapterResult } from '@/src/server/db/chapters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -14,6 +14,7 @@ export async function GET(
     await requireOwnedProject(projectId, searchEmail(request));
     const chapter = await getChapter(chapterId);
     if (!chapter || chapter.project_id !== projectId) throw notFound('章节不存在');
+    const navigation = await getAdjacentChapters(projectId, chapter.chapter_index);
 
     return {
       chapter: {
@@ -31,6 +32,7 @@ export async function GET(
         source_text: chapter.source_text,
         result: mergeChapterResult(chapter.result, chapter.enrichment),
       },
+      navigation,
     };
   });
 }

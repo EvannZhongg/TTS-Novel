@@ -149,6 +149,12 @@ export interface ChapterSummary {
   enrichment_revision: number;
 }
 
+export interface AdjacentChapter {
+  id: string;
+  chapter_index: number;
+  title: string;
+}
+
 export interface ProjectDetail {
   project: ProjectSummary & { has_book_result: boolean };
   chapters: ChapterSummary[];
@@ -196,7 +202,10 @@ export const api = {
     ),
 
   getChapter: (projectId: string, chapterId: string, email: string) =>
-    request<{ chapter: ChapterSummary & { source_text: string; result: Record<string, unknown> | null } }>(
+    request<{
+      chapter: ChapterSummary & { source_text: string; result: Record<string, unknown> | null };
+      navigation: { previous: AdjacentChapter | null; next: AdjacentChapter | null };
+    }>(
       'GET', `/api/app/projects/${projectId}/chapters/${chapterId}?email=${encodeURIComponent(email)}`,
     ),
 

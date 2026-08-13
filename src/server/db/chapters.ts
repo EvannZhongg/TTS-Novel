@@ -120,6 +120,55 @@ export async function getChapter(chapterId: string): Promise<ChapterRow | null> 
   return (result.data as ChapterRow | null) ?? null;
 }
 
+export interface AdjacentChapter {
+  id: string;
+  chapter_index: number;
+  title: string;
+}
+
+/**
+ * 取当前章节前后最近的已完成章节。
+ *
+ * 部分失败项目中可能存在 failed/pending 空档；导航跳过这些没有详情结果的章节，
+ * 保证按钮点击后总能进入可阅读的章节页。
+ */
+export async function getAdjacentChapters(
+  projectId: string,
+  chapterIndex: number,
+): Promise<{ previous: AdjacentChapter | null; next: AdjacentChapter | null }> {
+  const columns = 'id, chapter_index, title';
+  const [previousResult, nextResult] = await Promise.all([
+    db()
+      .from('chapters')
+      .select(columns)
+      .eq('project_id', projectId)
+      .eq('status', 'succeeded')
+      .lt('chapter_index', chapterIndex)
+      .order('chapter_index', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    db()
+      .from('chapters')
+      .select(columns)
+      .eq('project_id', projectId)
+      .eq('status', 'succeeded')
+      .gt('chapter_index', chapterIndex)
+      .order('chapter_index', { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  if (previousResult.error) {
+    throw new Error(`[db:getAdjacentChapters:previous] ${previousResult.error.message}`);
+  }
+  if (nextResult.error) {
+    throw new Error(`[db:getAdjacentChapters:next] ${nextResult.error.message}`);
+  }
+  return {
+    previous: (previousResult.data as AdjacentChapter | null) ?? null,
+    next: (nextResult.data as AdjacentChapter | null) ?? null,
+  };
+}
+
 /** 把不可变的完整单章结果与聚合产生的轻量 enrichment 合成前端消费形状。 */
 export function mergeChapterResult(
   result: AnyRecord | null,

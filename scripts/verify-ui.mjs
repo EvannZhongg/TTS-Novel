@@ -90,6 +90,17 @@ console.log('\n[3] 章节结果页所需数据');
   const detail = await api('GET', `/api/app/projects/${projectId}/chapters/${first.id}?email=${encodeURIComponent(EMAIL)}`);
   const chapter = detail.json.chapter;
   check(Boolean(chapter), '取到章节');
+  check(detail.json.navigation?.previous === null, '第一章的“上一章”为空');
+  check(
+    detail.json.navigation?.next?.id === list.json.chapters[1]?.id,
+    `第一章的“下一章”指向 #${detail.json.navigation?.next?.chapter_index}`,
+  );
+  const secondDetail = await api(
+    'GET',
+    `/api/app/projects/${projectId}/chapters/${list.json.chapters[1].id}?email=${encodeURIComponent(EMAIL)}`,
+  );
+  check(secondDetail.json.navigation?.previous?.id === first.id, '第二章的“上一章”指回第一章');
+  check(secondDetail.json.navigation?.next === null, '末章的“下一章”为空');
   check(chapter.enriched === true, 'enriched=true(聚合已回写角色与声线)');
 
   // 页面主要靠 tts_segments 渲染对白/旁白序列

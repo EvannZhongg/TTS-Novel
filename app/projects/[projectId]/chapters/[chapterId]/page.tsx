@@ -1,8 +1,14 @@
 'use client';
 
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { api, formatDuration, getStoredEmail } from '@/src/client/api';
+import {
+  api,
+  formatDuration,
+  getStoredEmail,
+  type AdjacentChapter,
+} from '@/src/client/api';
 import { Alert, BackLink } from '@/src/client/ui';
 import { FeedbackCard } from '@/src/client/FeedbackCard';
 
@@ -48,11 +54,64 @@ interface PopoverPosition {
   placement: 'left' | 'right' | 'below';
 }
 
+function ChapterNavigation({
+  projectId,
+  previous,
+  next,
+  position,
+}: {
+  projectId: string;
+  previous: AdjacentChapter | null;
+  next: AdjacentChapter | null;
+  position: 'header' | 'footer';
+}) {
+  const item = (
+    direction: 'previous' | 'next',
+    chapter: AdjacentChapter | null,
+  ) => {
+    const isPrevious = direction === 'previous';
+    const label = isPrevious ? '上一章' : '下一章';
+    const arrow = isPrevious ? '←' : '→';
+    if (!chapter) {
+      return (
+        <span className={`chapter-nav-link disabled ${direction}`} aria-disabled="true">
+          <span className="chapter-nav-direction">{isPrevious ? `${arrow} ${label}` : `${label} ${arrow}`}</span>
+          <small>{isPrevious ? '已经是第一章' : '已经是最后一章'}</small>
+        </span>
+      );
+    }
+    return (
+      <Link
+        className={`chapter-nav-link ${direction}`}
+        href={`/projects/${projectId}/chapters/${chapter.id}`}
+        title={`${label}：${chapter.title || `第${chapter.chapter_index}章`}`}
+        aria-label={`${label}，第${chapter.chapter_index}章，${chapter.title || `第${chapter.chapter_index}章`}`}
+      >
+        <span className="chapter-nav-direction">{isPrevious ? `${arrow} ${label}` : `${label} ${arrow}`}</span>
+        <small>
+          第{chapter.chapter_index}章 · {chapter.title || `第${chapter.chapter_index}章`}
+        </small>
+      </Link>
+    );
+  };
+
+  return (
+    <nav className={`chapter-navigation ${position}`} aria-label="章节切换">
+      {item('previous', previous)}
+      {item('next', next)}
+    </nav>
+  );
+}
+
 export default function ChapterPage({ params }: { params: Promise<{ projectId: string; chapterId: string }> }) {
   const { projectId, chapterId } = use(params);
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [chapter, setChapter] = useState<Awaited<ReturnType<typeof api.getChapter>>['chapter'] | null>(null);
+  const [navigation, setNavigation] = useState<{
+    previous: AdjacentChapter | null;
+    next: AdjacentChapter | null;
+  }>({ previous: null, next: null });
   const [roles, setRoles] = useState<RoleEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
@@ -61,6 +120,12 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
   const [popoverPosition, setPopoverPosition] = useState<PopoverPosition | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<HTMLElement | null>(null);
+
+  const closeSegmentPopover = useCallback(() => {
+    setSelectedSegment(null);
+    setPopoverPosition(null);
+    anchorRef.current = null;
+  }, []);
 
   useEffect(() => {
     const stored = getStoredEmail();
@@ -71,6 +136,10 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
   useEffect(() => {
     if (!email) return;
     let alive = true;
+    setChapter(null);
+    setNavigation({ previous: null, next: null });
+    setError(null);
+    closeSegmentPopover();
     (async () => {
       try {
         const [chapterRes, bookRes] = await Promise.all([
@@ -80,6 +149,7 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
         ]);
         if (!alive) return;
         setChapter(chapterRes.chapter);
+        setNavigation(chapterRes.navigation);
         const registry = (bookRes.book_result as { role_registry?: RoleEntry[] } | null)?.role_registry;
         setRoles(Array.isArray(registry) ? registry : []);
       } catch (err) {
@@ -87,7 +157,7 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
       }
     })();
     return () => { alive = false; };
-  }, [email, projectId, chapterId]);
+  }, [email, projectId, chapterId, closeSegmentPopover]);
 
   const result = chapter?.result as Record<string, unknown> | null | undefined;
   const segments = useMemo(() => (Array.isArray(result?.tts_segments) ? (result!.tts_segments as TtsSegment[]) : []), [result]);
@@ -157,12 +227,6 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
     () => visualSlices.find((slice) => slice.key === selectedSegment) ?? null,
     [selectedSegment, visualSlices],
   );
-
-  const closeSegmentPopover = useCallback(() => {
-    setSelectedSegment(null);
-    setPopoverPosition(null);
-    anchorRef.current = null;
-  }, []);
 
   const positionSegmentPopover = useCallback(() => {
     const anchor = anchorRef.current;
@@ -250,6 +314,12 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
           <h1>{chapter.title || `第${chapter.chapter_index}章`}</h1>
           <p className="sub">查看本章识别出的角色、声线与对白/旁白序列。</p>
         </div>
+        <ChapterNavigation
+          projectId={projectId}
+          previous={navigation.previous}
+          next={navigation.next}
+          position="header"
+        />
       </div>
 
       {!chapter.enriched && (
@@ -415,6 +485,13 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
           )}
         </aside>
       </div>
+
+      <ChapterNavigation
+        projectId={projectId}
+        previous={navigation.previous}
+        next={navigation.next}
+        position="footer"
+      />
 
       {selectedVisualSlice?.segment && popoverPosition && (
         <div

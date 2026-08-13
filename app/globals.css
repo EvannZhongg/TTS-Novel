@@ -487,6 +487,54 @@ button, input, textarea, select { font: inherit; }
 .aggregate-version { font-variant-numeric: tabular-nums; }
 .chapter-metrics { margin-top: -6px; }
 .chapter-alert { margin: 16px 0 0; }
+.chapter-navigation {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 210px));
+  gap: 8px;
+}
+.chapter-navigation.footer {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 34px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+.chapter-nav-link {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 11px 13px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+.chapter-nav-link.next { text-align: right; }
+.chapter-nav-link:not(.disabled):hover {
+  border-color: #a9c4fb;
+  background: #f8fbff;
+  transform: translateY(-1px);
+}
+.chapter-nav-direction {
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 850;
+}
+.chapter-nav-link small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chapter-nav-link.disabled {
+  cursor: not-allowed;
+  background: #f8fafc;
+  opacity: 0.52;
+}
+.chapter-nav-link.disabled .chapter-nav-direction { color: var(--muted); }
 .chapter-result-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(270px, 320px);
@@ -1060,6 +1108,11 @@ button, input, textarea, select { font: inherit; }
   .page { padding: 20px 14px 48px; }
   .page-header { align-items: flex-start; margin-top: 12px; }
   .page-actions { width: 100%; }
+  .page-header > .chapter-navigation { width: 100%; }
+  .chapter-navigation { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chapter-navigation.footer { margin-top: 26px; padding-top: 18px; }
+  .chapter-nav-link { padding: 10px 11px; }
+  .chapter-navigation.header .chapter-nav-link small { display: none; }
   .dashboard-header .page-actions .account-label { width: 100%; max-width: none; }
   .landing-copy h1 { font-size: clamp(38px, 12vw, 58px); }
   .landing-lead { margin-top: 18px; font-size: 15px; }

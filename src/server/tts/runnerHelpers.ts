@@ -1,5 +1,34 @@
 import { toFloat, toInt } from './utils';
-import type { AnyRecord, GroundingCandidate, QuoteSpanCandidate } from './types';
+import type { AnyRecord, GroundingCandidate, QuoteSpanCandidate, Settings } from './types';
+
+/**
+ * 结果里回显的 pipeline 配置。
+ *
+ * 原先这段在 runMinimal 里写了两遍(进度快照与最终返回各一份), 两处只要有一处
+ * 改动就会静默漂移。抽到这里统一维护。放在 runnerHelpers 而非 stages, 是因为
+ * stages 依赖 runner, 反向 import 会形成循环。
+ */
+export function pipelineConfigSnapshot(settings: Settings): AnyRecord {
+  return {
+    concurrency: {
+      max_parallel_chapters: Math.max(1, settings.pipeline.maxParallelChapters),
+      chapter_chunks_are_serial: true,
+    },
+    grounding: {
+      enabled: settings.pipeline.groundingEnabled,
+      fuzzy_min_score: settings.pipeline.groundingFuzzyMinScore,
+      evidence_fuzzy_min_score: settings.pipeline.groundingEvidenceFuzzyMinScore,
+      ambiguity_margin: settings.pipeline.groundingAmbiguityMargin,
+      evidence_window_chars: settings.pipeline.groundingEvidenceWindowChars,
+    },
+    quote_span_recovery: {
+      enabled: settings.pipeline.quoteSpanRecoveryEnabled,
+      context_chars: settings.pipeline.quoteSpanRecoveryContextChars,
+      batch_size: settings.pipeline.quoteSpanRecoveryBatchSize,
+      boundary_repair_enabled: settings.pipeline.quoteSpanRecoveryEnabled,
+    },
+  };
+}
 
 export function mergeAliasesFromChapters(chapters: AnyRecord[]): AnyRecord[] {
   const merged: AnyRecord[] = [];

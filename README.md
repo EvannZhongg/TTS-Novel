@@ -1,362 +1,245 @@
-# NovelMind
+# 多播电子书测试系统
 
-NovelMind 是一个面向中文小说文本的智能分析与多角色 TTS 前处理工具。它把小说 TXT 输入转成结构化的章节、对白、角色、声线和 TTS segment 数据，并提供可视化界面用于检查章节判断、LLM 抽取、原文定位和导出分析结果。
+面向中文小说的**章节拆分 + 多角色对白抽取**服务。把小说文本转成结构化的章节、
+对白、角色、声线和 TTS segment 数据。
 
-当前项目是一个 Next.js 单体应用：前端可视化页面和后端 pipeline API 部署在同一个应用中，所有请求都走同源 `/api/v1`。
+当前形态是一个 Next.js 应用:面向用户的 demo(收集拆分质量反馈)+ 内部 API。
+数据落 Supabase Postgres。
 
-## 主要能力
+## 架构要点
 
-- TXT 上传 / 粘贴输入，并自动处理常见文本编码。
-- 小说章节标题候选识别，并可通过 LLM 判断真实章节标题。
-- 章节拆分、正文清洗、chunk 切分。
-- 使用 OpenAI-compatible LLM 抽取多角色对白 span。
-- 对 LLM 输出做 source grounding，定位对白在原文中的位置。
-- 从引号文本中补抽遗漏对白，并修复部分引号边界问题。
-- 合并角色 aliases、性别投票结果，并生成角色声线 profile。
-- 生成旁白 / 对白 TTS segments，包含 speaker、emotion、voice profile、定位信息。
-- 前端展示章节、chunk、span、TTS 覆盖和运行日志。
-- 导出分析 JSON，包含 normalized text、明确坐标说明、job logs 和 error 信息。
+### 为什么是章节级任务队列
 
-## 技术栈
+实测数据(见 `docs/phase0-measurements.md`):
 
-- Next.js App Router
-- React
-- TypeScript
-- Node.js runtime API Routes
-- OpenAI-compatible Chat Completions API
-- 本地文件系统 job store，Vercel 上默认使用 `/tmp/tts-pipeline-data`
+| 指标 | 实测值 |
+|---|---|
+| 单章处理耗时 | **约 35s**(约 1150 字/章,含 grounding 与引号补抽) |
+| 原文 → 结果膨胀 | **91 bytes / 原文字** |
+| 单章结果 JSON | 85–223 KB |
+| 400 章长篇串行 | 233 分钟(3 并发约 78 分钟) |
 
-## 目录结构
+Vercel 函数上限 300s **最多只能跑 8 章**,所以整本同步处理必然超时。
+方案是把每章做成一个独立任务:
 
-```text
-app/
-  page.tsx                                  # 可视化页面
-  layout.tsx                                # 全局布局，引入 public/app.js
-  globals.css                               # 页面样式
-  api/v1/**/route.ts                        # 同源 API Route Handlers
-
-public/
-  app.js                                    # 前端交互、可视化、导入导出逻辑
-
-src/server/tts/
-  config.ts                                 # 环境变量配置
-  service.ts                                # job 创建、轮询、存储、结果保存
-  jobStore.ts                               # job.json / result.json / events.jsonl 文件存储
-  runner.ts                                 # pipeline 主编排
-  text.ts                                   # 文本预处理、章节识别、chunk、引号候选
-  grounding.ts                              # source grounding
-  runnerHelpers.ts                          # aliases、声线、TTS segment 等辅助逻辑
-  llm.ts                                    # OpenAI-compatible / mock LLM client
-  prompts/*.md                              # LLM prompts
 ```
+建项目 → [chapterize 任务] → [chapter 任务 × N] → [aggregate 任务] → 完成
+```
+
+状态全在 Postgres 里,所以刷新页面、换设备、关掉再打开都能续跑。
+
+### 三个阶段与纯函数约束
+
+`src/server/tts/stages.ts` 暴露三个阶段:
+
+| 阶段 | 作用 |
+|---|---|
+| `runChapterizeStage` | 正则找标题候选 → LLM 校验 → 拆章 |
+| `runChapterStage` | 单章完整分析(复用 `runner.processChapter`) |
+| `runAggregateStage` | 全书 aliases / 声线 profile / TTS segment |
+
+> **`stages.ts` 必须保持零 DB 依赖。** 所有数据库读写都在
+> `src/server/queue/worker.ts`。这样后续对外 API(输入 `{key, text}` 单章文本 →
+> 返回拆分结果)可以直接调 `runChapterStage`,一行 DB 代码都不需要。
+
+`runMinimal`(整本一次跑完)保留下来**专门作为等价性基准**,不再有路由暴露它。
+
+### 并发正确性在数据库层
+
+两个竞态必须由 Postgres 函数保证,不能靠应用层判断
+(见 `supabase/migrations/0002_functions.sql`):
+
+- **原子领任务** —— `claim_next_job` 用 `for update skip locked`,
+  并发调用各自领到不同任务
+- **"谁是最后一章"** —— `finish_chapter_job` 先锁 project 行,
+  把"递增计数"和"判断是否最后一个"放进同一临界区。
+  两章同时完成时既不会建出两个聚合,也不会一个都不建
+
+### 数据存储取舍
+
+- 小说原文单独存 `project_sources` 表 —— 列项目时不会拖出几 MB 全文
+- 每章存两份结果:`result`(完整,给用户结果页)+ `digest`(约 20%,只给聚合)。
+  聚合只读 digest:400 章长篇完整数据 87MB → digest 17MB
+- `projects.book_result` **只存全书级摘要**,绝不含完整章节
+
+### 安全模型
+
+- 浏览器**永不直连 Supabase**,一律走 `/api/app/*`,服务端用 secret key
+- 所有表开 RLS 且**不建任何 policy** → anon key 一行都读不到
+- **邮箱即凭据且未经验证** —— 任何人填同一邮箱都能看到该邮箱下的项目。
+  这是刻意的 demo 取舍(零摩擦、可跨设备恢复),前端已明示"非私密"
+
+## 页面
+
+```
+/                                项目列表 + 邮箱入口
+/projects/new                    新建(整本上传 / 逐章上传)
+/projects/[id]                   进度 + 章节列表 + 失败重试 + token 用量
+/projects/[id]/chapters/[cid]    结果(角色/声线/对白/原文高亮)+ 反馈
+```
+
+章节结果支持在「结构化列表」和「原文高亮」之间切换。高亮只使用单章结果中
+已有的 `tts_segments.start/end`，不提供额外的内部调试组件。
+
+**整本上传** 会在后台拆章(含 LLM 标题校验)。
+**逐章上传** 是可持续追加的连载项目，不做任何标题拆分 —— `title` 只是可选
+展示标签，缺省自动编号。项目创建后可在详情页继续批量选择 TXT 或粘贴章节，
+新章节从当前末尾连续编号并立即进入处理队列。
+
+### 持续追加与结果版本
+
+逐章项目不是一次性任务。数据库用以下字段区分“正文最新版本”和“全书结果版本”：
+
+- `projects.content_revision`：每次追加或重试失败章节时递增
+- `projects.aggregated_revision`：当前已发布的全书角色/声线结果版本
+- `projects.aggregate_status`：`clean / dirty / running / failed`
+- `jobs.target_revision`：章节或聚合任务针对的正文版本
+
+上传批次通过 `append_chapter_batch()` 原子完成序号分配、章节插入、项目计数、
+版本递增和任务创建。客户端为每批提供 `request_id`，相同请求重放不会重复创建
+章节；正文 SHA-256 相同的新请求会被判定为重复章节。
+
+聚合任务带版本栅栏：如果聚合运行期间又追加了章节，旧任务可以完成计算，但
+不能覆盖最新 `book_result`，系统会在所有新章节终结后补建最新版本聚合。
+
+单章的完整 `chapters.result` 保持不可变。全书聚合新增的角色绑定、声线与
+`tts_segments` 写入独立的 `chapters.enrichment`，读取章节时再合并，避免过去
+用精简 digest 覆盖完整结果的问题。
+
+聚合回写按 25 章一批调用 `save_chapter_enrichment_batch()`，400 章长篇从约
+400 次逐章数据库往返降为约 16 次批量往返。
+
+## API
+
+### 内部(供 demo 前端,邮箱凭据)
+
+```
+POST /api/app/session                            登记/识别邮箱
+GET  /api/app/projects?email=                    项目列表
+POST /api/app/projects                           新建(whole_book / per_chapter)
+GET  /api/app/projects/[id]                      进度 + 章节列表
+DELETE /api/app/projects/[id]?email=             删除项目及全部关联内容
+POST /api/app/projects/[id]/chapters             逐章项目追加章节（request_id 幂等）
+GET  /api/app/projects/[id]/chapters/[cid]       单章完整结果
+GET  /api/app/projects/[id]/result               全书聚合摘要
+GET  /api/app/projects/[id]/usage                token 用量 + 失败记录
+POST /api/app/projects/[id]/retry                重试失败章节
+POST /api/app/process-next                       领并处理一个任务(队列驱动)
+POST /api/app/feedback                           用户反馈
+```
+
+### 运维
+
+```
+GET  /api/v1/health      服务 + DB 探活
+POST /api/v1/llm/test    LLM 连通性(需 x-admin-token)
+```
+
+`/api/v1` 命名空间的其余部分留给将来的对外服务(单章进 → 结果出,
+形态待与 TTS 一起设计)。
 
 ## 本地运行
 
 ```bash
-cp .env.example .env
 npm install
+cp .env.example .env      # 填 SUPABASE_* 与 LLM_*
+npm run migrate           # 应用数据库迁移
 npm run dev
 ```
 
-打开：
+### 数据库连接
 
-```text
-http://localhost:3000
-```
-
-如需不依赖外部 LLM 快速验证页面和 pipeline 流程，可以使用 mock provider：
-
-```bash
-LLM_PROVIDER=mock npm run dev
-```
-
-## 环境变量
-
-常用配置在 `.env.example` 中。
-
-### 应用配置
+Supabase 直连主机 `db.<ref>.supabase.co` **只有 IPv6 记录**,本地无 IPv6 出口
+时会 `ENOTFOUND`。改用 pooler(**端口 5432 session mode**,6543 的
+transaction mode 不支持迁移所需的事务语义):
 
 ```env
-APP_ENV=development
-# 本地默认 ./data；Vercel 默认 /tmp/tts-pipeline-data
-# APP_DATA_DIR=./data
+SUPABASE_DB_HOST=aws-0-<region>.pooler.supabase.com
+SUPABASE_DB_PORT=5432
+SUPABASE_DB_USER=postgres.<project-ref>
+SUPABASE_DB_PASSWORD=...
 ```
 
-### LLM 配置
+`npm run db:probe` 会自动探测可用端点并打印该写进 `.env` 的配置。
 
-```env
-LLM_PROVIDER=openai_compatible
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_API_KEY=
-LLM_MODEL=gpt-4o-mini
-LLM_TIMEOUT_SECONDS=120
-LLM_TEMPERATURE=0
-LLM_MAX_OUTPUT_TOKENS=8192
-LLM_RETRY_MAX_ATTEMPTS=3
-LLM_RETRY_BACKOFF_SECONDS=1.0
-LLM_LOG_FAILED_RESPONSE_CHARS=2000
-```
-
-`LLM_BASE_URL` 应填写 OpenAI-compatible API 的 base URL，不要包含 `/chat/completions`，代码会自动拼接：
-
-```text
-{LLM_BASE_URL}/chat/completions
-```
-
-### Pipeline 配置
-
-```env
-PIPELINE_CHUNK_MAX_CHARS=800
-PIPELINE_CHUNK_OVERLAP_CHARS=0
-PIPELINE_MAX_PARALLEL_CHAPTERS=3
-
-PIPELINE_CHAPTER_TITLE_VALIDATION_ENABLED=true
-PIPELINE_CHAPTER_TITLE_VALIDATION_BATCH_SIZE=30
-PIPELINE_CHAPTER_TITLE_CONTEXT_LINES=2
-
-PIPELINE_GROUNDING_ENABLED=true
-PIPELINE_GROUNDING_FUZZY_MIN_SCORE=0.9
-PIPELINE_GROUNDING_EVIDENCE_FUZZY_MIN_SCORE=0.86
-PIPELINE_GROUNDING_AMBIGUITY_MARGIN=0.03
-PIPELINE_GROUNDING_EVIDENCE_WINDOW_CHARS=240
-
-PIPELINE_QUOTE_SPAN_RECOVERY_ENABLED=true
-PIPELINE_QUOTE_SPAN_RECOVERY_CONTEXT_CHARS=80
-PIPELINE_QUOTE_SPAN_RECOVERY_BATCH_SIZE=20
-
-PIPELINE_ROLE_VOICE_PROFILE_ENABLED=true
-PIPELINE_ROLE_VOICE_PROFILE_EVIDENCE_MAX_CHARS=1600
-PIPELINE_ROLE_VOICE_PROFILE_BATCH_SIZE=8
-PIPELINE_ROLE_VOICE_PROFILE_MAX_PARALLEL_BATCHES=3
-PIPELINE_ROLE_VOICE_PROFILE_MINOR_SPAN_THRESHOLD=1
-```
-
-## 使用流程
-
-1. 点击页面右上角“上传 TXT”，上传小说 TXT 或直接粘贴文本。
-2. 填写书名。
-3. 点击“运行完整 Pipeline”。
-4. 页面会创建 job，并持续轮询 `/api/v1/pipeline/jobs/{job_id}`。
-5. 运行过程中可查看已完成章节、当前任务日志和 progressive partial result。
-6. 完成后可以查看章节 / chunk / span、原文高亮、TTS 覆盖、角色 aliases 和声线 profile。
-7. 点击“导出 JSON”得到 `.pipeline-analysis.json` 分析包。
-
-## API
-
-### 健康检查
-
-```text
-GET /api/v1/health
-```
-
-返回服务状态、环境、LLM provider 和模型信息。
-
-### LLM 测试
-
-```text
-POST /api/v1/llm/test
-```
-
-请求：
-
-```json
-{
-  "text": "Return {\"ok\": true}"
-}
-```
-
-### 章节预览
-
-```text
-POST /api/v1/pipeline/chapter-preview
-```
-
-只执行预处理、章节候选识别、章节拆分和 chunk 预览，不执行完整 dialogue span 抽取。
-
-### 同步运行完整 Pipeline
-
-```text
-POST /api/v1/pipeline/run
-```
-
-该接口会等待 pipeline 完成后返回完整结果。长文本更建议使用 job 接口。
-
-### 创建 Pipeline Job
-
-```text
-POST /api/v1/pipeline/jobs
-```
-
-请求：
-
-```json
-{
-  "book_title": "demo",
-  "text": "第1章 ...",
-  "chapter_ids": null
-}
-```
-
-返回：
-
-```json
-{
-  "job_id": "...",
-  "status": "queued",
-  "storage": {}
-}
-```
-
-### 查询 Job
-
-```text
-GET /api/v1/pipeline/jobs/{job_id}?include_result=false&log_tail=5000
-```
-
-常用 query：
-
-- `include_result=true`：完成后返回完整 `result`。
-- `log_tail=5000`：返回最新 N 条日志。
-
-### 查询 Job 日志
-
-```text
-GET /api/v1/pipeline/jobs/{job_id}/logs?tail=5000
-```
-
-### 保存 / 获取前端分析结果
-
-```text
-POST /api/v1/pipeline/jobs/{job_id}/frontend-result
-GET  /api/v1/pipeline/jobs/{job_id}/frontend-result
-```
-
-前端在 pipeline 完成后会保存一份前端重映射后的分析包到 job 目录，文件名为 `frontend_result.json`。
-
-## 结果文件
-
-每个 job 会写入一个目录。默认路径：
-
-- 本地：`./data/pipeline_jobs/{job_id}`
-- Vercel：`/tmp/tts-pipeline-data/pipeline_jobs/{job_id}`
-
-主要文件：
-
-```text
-job.json                  # job 元数据
-request.json              # 原始请求
-events.jsonl              # 运行日志
-partial_result.json       # progressive partial result
-result.json               # 后端完整 result
-frontend_result.json      # 前端分析包
-error.json                # 失败信息
-```
-
-注意：Vercel 的 `/tmp` 不是持久化存储，只适合演示和短期轮询。长期保存建议接入 Vercel Blob、KV、Postgres 或对象存储。
-
-## 导出 JSON 格式
-
-前端导出的文件使用 schema：
-
-```text
-tts_pipeline_analysis_v1
-```
-
-顶层结构：
-
-```json
-{
-  "schema_version": "tts_pipeline_analysis_v1",
-  "exported_at": "2026-07-03T00:00:00.000Z",
-  "source": "frontend_demo",
-  "job": {
-    "job_id": "...",
-    "status": "completed",
-    "stage": "completed",
-    "message": "...",
-    "created_at": "...",
-    "started_at": "...",
-    "completed_at": "...",
-    "request_summary": {},
-    "storage": {}
-  },
-  "input": {
-    "file_name": "...",
-    "book_title": "...",
-    "normalized_text": "...",
-    "normalized_text_chars": 0,
-    "normalized_line_count": 0
-  },
-  "coordinate_systems": {
-    "normalized_text": "...",
-    "cleaned_chapter_text": "...",
-    "result_coordinate_basis": "source_text_v2",
-    "fields": {}
-  },
-  "analysis_summary": {
-    "chapter_count": 0,
-    "chunk_count": 0,
-    "span_count": 0,
-    "grounded_count": 0,
-    "tts_segment_count": 0
-  },
-  "result": {},
-  "logs": [],
-  "error": null
-}
-```
-
-导入 JSON 只接受该新格式，不兼容旧的裸 `result` JSON。
-
-### 坐标说明
-
-导出包内会写入 `coordinate_systems.fields`，用于解释各类坐标字段。核心规则：
-
-- `input.normalized_text` 是前端统一换行后的分析文本。
-- `display_*` 坐标以 `input.normalized_text` 为基准。
-- `clean_*` 坐标以单章 `cleanChapterText` 后的 cleaned chapter text 为基准。
-- 前端导出的 `chapter.start/end`、`chunk.start/end`、`span.start/end` 通常是展示坐标，等同于对应的 `display_*`。
-- `chapter.source_start/source_end` 表示后端拆章后的章节正文在 `cleanBeforeChapterSplit` 文本中的坐标，仅在前端重映射后存在。
-
-## Pipeline 输出概览
-
-完整 `result` 中包含：
-
-- `preprocessing`：预处理统计。
-- `chapter_title_detection`：章节候选和 LLM 判断结果。
-- `grounding`：定位配置和阈值。
-- `quote_span_recovery`：引号补抽配置和结果。
-- `aliases`：全书角色别名和性别投票结果。
-- `role_registry`：角色声线 profile。
-- `cleaned_text`：全书清洗后文本。
-- `tts_segments` / `tts_segment_summary`：全书 TTS segments。
-- `chapters`：章节级结构，每章包含 chunks、LLM 原始结果、grounding 结果、quote recovery 结果和 chapter 级 TTS segments。
-
-## Vercel 部署
-
-1. 在 Vercel Project Settings 中配置 `.env.example` 中的 LLM 和 pipeline 环境变量。
-2. API routes 使用 Node.js runtime，并设置 `maxDuration = 300`；实际可用时长仍取决于 Vercel 账号和计划限制。
-3. `POST /api/v1/pipeline/jobs` 使用 Next.js `after()` 在返回 job id 后继续执行后台 pipeline。
-4. 超长文本、大量章节或大量 LLM 请求可能超过函数最长执行时间，生产长期任务建议接入队列和持久化存储。
-5. 如果使用内网或企业代理 LLM，请确认 Vercel 部署区域可以访问该 `LLM_BASE_URL`。
-
-## 校验
+## 验收脚本
 
 ```bash
 npm run typecheck
 npm run build
+
+npm run verify:schema        # 表/索引/RLS/竞态/重试路径(不需要 dev server)
+npm run verify:equivalence   # 等价性基准: 三阶段组合 == 旧 runMinimal(离线回放)
+npm run verify:ui            # 页面渲染 + 脚本隔离 + 数据契约(需 dev server)
+npm run verify:e2e           # 真实 HTTP 全链路(需 dev server + 真实 LLM)
+npm run verify:llm-logs      # LLM 日志表内容与体积
+npm run verify:failure       # 失败与重试路径(自起实例, 需先停 3000 端口)
 ```
 
-也可以先使用 mock provider 做端到端验证：
+### 等价性基准是核心护栏
+
+`verify:equivalence` 用 **cassette 录制真实 LLM 响应后离线回放**,证明
+「三阶段组合」与旧 `runMinimal` 产出**逐字节一致**。
+
+不要改用 `LLM_PROVIDER=mock` 做这个基准 —— `MockLLMClient` 的
+`dialogue_spans` 恒为空数组,span 抽取 / grounding / 引号补抽 / 声线绑定
+全都不会执行,而那恰恰是最容易改坏的部分。
+
+首次需要录制(会真实调用 LLM):
 
 ```bash
-LLM_PROVIDER=mock npm run dev
+npm run verify:equivalence -- --record
+```
+
+## 环境变量
+
+关键项:
+
+```env
+# Supabase(运行时)
+SUPABASE_URL=
+SUPABASE_SECRET_KEY=          # 服务端专用, 绕过 RLS
+SUPABASE_PUBLISHABLE_KEY=     # 目前仅用于验收脚本断言 anon 被拒
+
+# Supabase(仅本地迁移用, 不参与运行时)
+SUPABASE_DB_HOST=
+SUPABASE_DB_PORT=5432
+SUPABASE_DB_USER=
+SUPABASE_DB_PASSWORD=
+
+# LLM(OpenAI 兼容)
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=
+LLM_MODEL=deepseek-v4-flash
+LLM_TIMEOUT_SECONDS=120
+LLM_RETRY_MAX_ATTEMPTS=3
+LLM_LOG_FAILED_RESPONSE_CHARS=2000   # 失败时保存的 prompt/响应片段长度
+
+# Pipeline(常用)
+PIPELINE_CHUNK_MAX_CHARS=800
+PIPELINE_MAX_PARALLEL_CHAPTERS=3
+PIPELINE_GROUNDING_ENABLED=true
+PIPELINE_QUOTE_SPAN_RECOVERY_ENABLED=true
+PIPELINE_ROLE_VOICE_PROFILE_ENABLED=true
+
+# 队列
+QUEUE_LEASE_SECONDS=300              # 租约; 过期的 running 任务会被回收重投
+QUEUE_MAX_ATTEMPTS=3
+QUEUE_CHAPTER_SLOW_WARN_MS=120000    # 单章耗时告警阈值
+QUEUE_MAX_TASKS_PER_REQUEST=1
+
+# 运维
+ADMIN_TOKEN=                         # /api/v1/llm/test 需要
 ```
 
 ## 已知限制
 
-- 当前 job store 是文件系统实现，不适合作为生产级持久化数据库。
-- Vercel `/tmp` 数据可能随实例回收而消失。
-- 长任务依赖平台函数时长限制。
-- 前端导入 JSON 只支持 `tts_pipeline_analysis_v1` 新格式。
-- 当前输出是 TTS 前处理结构化数据，不直接生成音频文件。
+- **Vercel Hobby 的 cron 只有天级粒度**。当前队列靠前端页面驱动
+  (项目页轮询时并发调用 `process-next`),用户关掉页面后进度会停在原处,
+  下次打开继续。分钟级的无人值守推进需要 Pro 计划的 cron。
+- 邮箱未验证,demo 项目非私密。
+- 极端长章(单章上万字 → 多 chunk × 每 chunk 一次 LLM)有超时风险,
+  worker 会记录 `duration_ms` 并在超阈值时告警,但暂未拆到 chunk 级任务。
+- 日志表(`job_events` / `llm_calls`)保留 14 天,由 `prune_logs()` 清理,
+  目前需要手动或由 cron 触发。
+- 当前输出是 TTS 前处理的结构化数据,不生成音频。

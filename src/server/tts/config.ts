@@ -1,4 +1,3 @@
-import path from 'node:path';
 import type { Settings } from './types';
 
 function env(name: string, fallback = ''): string {
@@ -31,7 +30,6 @@ export function loadSettings(): Settings {
     app: {
       name: env('APP_NAME', 'tts-pipeline-next'),
       env: env('APP_ENV', process.env.NODE_ENV || 'development'),
-      dataDir: env('APP_DATA_DIR', process.env.VERCEL ? '/tmp/tts-pipeline-data' : path.join(process.cwd(), 'data')),
     },
     llm: {
       provider: env('LLM_PROVIDER', 'openai_compatible'),
@@ -40,7 +38,7 @@ export function loadSettings(): Settings {
       model: env('LLM_MODEL', 'gpt-4o-mini'),
       timeoutSeconds: envInt('LLM_TIMEOUT_SECONDS', 120),
       temperature: envFloat('LLM_TEMPERATURE', 0),
-      maxOutputTokens: envInt('LLM_MAX_OUTPUT_TOKENS', 8192),
+      maxOutputTokens: envInt('LLM_MAX_OUTPUT_TOKENS', 32768),
       retryMaxAttempts: envInt('LLM_RETRY_MAX_ATTEMPTS', 3),
       retryBackoffSeconds: envFloat('LLM_RETRY_BACKOFF_SECONDS', 1),
       logFailedResponseChars: envInt('LLM_LOG_FAILED_RESPONSE_CHARS', 2000),
@@ -65,12 +63,22 @@ export function loadSettings(): Settings {
       roleVoiceProfileBatchSize: envInt('PIPELINE_ROLE_VOICE_PROFILE_BATCH_SIZE', 8),
       roleVoiceProfileMaxParallelBatches: envInt('PIPELINE_ROLE_VOICE_PROFILE_MAX_PARALLEL_BATCHES', 3),
       roleVoiceProfileMinorSpanThreshold: envInt('PIPELINE_ROLE_VOICE_PROFILE_MINOR_SPAN_THRESHOLD', 1),
-      rulesFallbackEnabled: envBool('PIPELINE_RULES_FALLBACK_ENABLED', false),
       dialogueSpanPromptFile: env('DIALOGUE_SPAN_PROMPT_FILE', 'dialogue_span_extraction.zh.md'),
       chapterTitleValidationPromptFile: env('CHAPTER_TITLE_VALIDATION_PROMPT_FILE', 'chapter_title_validation.zh.md'),
       quoteSpanRecoveryPromptFile: env('QUOTE_SPAN_RECOVERY_PROMPT_FILE', 'quote_span_recovery.zh.md'),
       roleVoiceProfilePromptFile: env('ROLE_VOICE_PROFILE_PROMPT_FILE', 'role_voice_profile.zh.md'),
       roleVoiceProfileMinorGroupPromptFile: env('ROLE_VOICE_PROFILE_MINOR_GROUP_PROMPT_FILE', 'role_voice_profile_minor_group.zh.md'),
+    },
+    supabase: {
+      url: env('SUPABASE_URL', ''),
+      secretKey: env('SUPABASE_SECRET_KEY', ''),
+      publishableKey: env('SUPABASE_PUBLISHABLE_KEY', ''),
+    },
+    queue: {
+      leaseSeconds: envInt('QUEUE_LEASE_SECONDS', 300),
+      maxAttempts: envInt('QUEUE_MAX_ATTEMPTS', 3),
+      chapterSlowWarnMs: envInt('QUEUE_CHAPTER_SLOW_WARN_MS', 120000),
+      maxTasksPerRequest: envInt('QUEUE_MAX_TASKS_PER_REQUEST', 1),
     },
   };
 }

@@ -1,165 +1,289 @@
-export default function Home() {
-  return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">TTS Pipeline · Next.js 单体应用</p>
-          <h1>TTS Pipeline 全流程可视化</h1>
-        </div>
-        <div className="topbar-actions">
-          <button id="healthBtn" className="btn btn-ghost">检查 API</button>
-          <button id="importJsonBtn" className="btn btn-ghost">导入 JSON</button>
-          <button id="openUploadBtn" className="btn btn-primary">上传 TXT</button>
-          <input id="importJsonInput" type="file" accept=".json,application/json" hidden />
-        </div>
-      </header>
+'use client';
 
-      <main className="layout">
-        <aside className="sidebar card">
-          <section className="control-section">
-            <h2>输入</h2>
-            <div className="book-title-row">
-              <label htmlFor="bookTitleInput">书名</label>
-              <input id="bookTitleInput" type="text" defaultValue="demo" />
+import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
+import {
+  api, clearStoredEmail, getStoredEmail, getStoredEmails, setStoredEmail,
+  type ProjectSummary,
+} from '@/src/client/api';
+import { Alert, ProgressBar, StatusBadge } from '@/src/client/ui';
+
+export default function HomePage() {
+  const [email, setEmail] = useState('');
+  const [inputEmail, setInputEmail] = useState('');
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [knownEmails, setKnownEmails] = useState<string[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null);
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const stored = getStoredEmail();
+    setKnownEmails(getStoredEmails());
+    setEmail(stored);
+    setInputEmail(stored);
+    setReady(true);
+  }, []);
+
+  const load = useCallback(async (target: string) => {
+    if (!target) return;
+    setBusy(true);
+    try {
+      const { projects: list } = await api.listProjects(target);
+      setProjects(list);
+      setError(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // 邮箱尚未登记时后端返回 404, 这不是错误, 只是还没有项目
+      if (/尚无记录/.test(message)) {
+        setProjects([]);
+        setError(null);
+      } else {
+        setError(message);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (ready && email) void load(email);
+  }, [ready, email, load]);
+
+  const signIn = async (targetEmail?: string) => {
+    const value = (targetEmail ?? inputEmail).trim().toLowerCase();
+    if (!value) return;
+    setInputEmail(value);
+    setBusy(true);
+    try {
+      await api.session(value);
+      setStoredEmail(value);
+      setKnownEmails(getStoredEmails());
+      setEmail(value);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const signOut = () => {
+    clearStoredEmail();
+    setEmail('');
+    setInputEmail('');
+    setProjects([]);
+  };
+
+  const deleteSelectedProject = async () => {
+    if (!deleteTarget || !email) return;
+    setDeletingProjectId(deleteTarget.id);
+    setError(null);
+    try {
+      await api.deleteProject(deleteTarget.id, email);
+      setProjects((current) => current.filter((project) => project.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingProjectId(null);
+    }
+  };
+
+  // 注意: 不要用 `if (!ready) return 空白` —— 那会让首屏服务端渲染成空页面,
+  // 用户看到一瞬白屏, 且禁用 JS 时完全没有内容。
+  // 邮箱入口对未登记用户本就是正确的首屏, 所以默认渲染它;
+  // 只有确实从 localStorage 读到邮箱时才切换到项目列表。
+  if (!email) {
+    return (
+      <main className="page page-landing">
+        <section className="landing-intro">
+          <div className="landing-copy">
+            <p className="eyebrow">多播电子书测试系统</p>
+            <h1>把小说文本拆成<br />可直接使用的<br />结构化内容</h1>
+          </div>
+          <ul className="feature-list" aria-label="功能概览">
+            <li><strong>自动拆章</strong><span>识别章节标题与正文边界</span></li>
+            <li><strong>对白抽取</strong><span>区分旁白、说话人与情绪</span></li>
+            <li><strong>角色声线</strong><span>聚合角色别名与声音描述</span></li>
+          </ul>
+        </section>
+
+        <section className="card identity-card">
+          <div className="section-heading">
+            <p className="eyebrow">Start</p>
+            <h2>用邮箱开始体验</h2>
+            <p className="sub">
+              无需注册。在任何设备填写同一邮箱，都可以继续查看之前的处理项目。
+            </p>
+          </div>
+          <div className="identity-row" style={ready ? undefined : { opacity: 0.6 }}>
+            <input
+              type="email"
+              placeholder="you@example.com"
+              value={inputEmail}
+              onChange={(event) => setInputEmail(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') void signIn(); }}
+              aria-label="邮箱"
+            />
+            <button className="btn btn-primary" onClick={() => void signIn()} disabled={busy || !inputEmail.trim()}>
+              {busy ? '处理中…' : '开始使用'}
+            </button>
+          </div>
+          {knownEmails.length > 0 && (
+            <div className="saved-accounts">
+              <span>此设备使用过</span>
+              <div className="saved-account-list">
+                {knownEmails.map((savedEmail) => (
+                  <button
+                    key={savedEmail}
+                    type="button"
+                    onClick={() => void signIn(savedEmail)}
+                    disabled={busy}
+                    title={`使用 ${savedEmail}`}
+                  >
+                    <span>{savedEmail}</span>
+                    <i aria-hidden="true">→</i>
+                  </button>
+                ))}
+              </div>
             </div>
-            <p className="hint">同源运行完整 pipeline：预处理 → LLM 章节判断 → 拆章/chunk → LLM 对白 span 抽取 → source grounding 定位。</p>
-            <div id="jobIdDisplay" className="job-id-display empty">Job ID：无</div>
-            <button id="runPipelineBtn" className="btn btn-primary wide">运行完整 Pipeline</button>
-          </section>
+          )}
+          {error && <div style={{ marginTop: 12 }}><Alert kind="error">{error}</Alert></div>}
 
-          <section className="control-section">
-            <h2>文件概览</h2>
-            <dl className="stats-list" id="inputStats">
-              <div><dt>文件</dt><dd>尚未上传</dd></div>
-              <div><dt>字符数</dt><dd>0</dd></div>
-              <div><dt>行数</dt><dd>0</dd></div>
-            </dl>
-          </section>
-
-          <section className="control-section">
-            <h2>结果概览</h2>
-            <dl className="stats-list" id="resultStats">
-              <div><dt>章节数</dt><dd>0</dd></div>
-              <div><dt>Chunk 数</dt><dd>0</dd></div>
-              <div><dt>Dialogue spans</dt><dd>0</dd></div>
-              <div><dt>定位成功</dt><dd>0</dd></div>
-            </dl>
-          </section>
-
-          <section className="control-section">
-            <div className="section-heading-row">
-              <h2>阶段</h2>
-              <span id="currentJobBadge" className="mini-badge">无任务</span>
-            </div>
-            <ol className="pipeline-steps" id="pipelineSteps">
-              <li className="active">TXT 上传/粘贴</li>
-              <li>拆章前预处理</li>
-              <li>章节标题候选识别</li>
-              <li>章节拆分 / Chunk</li>
-              <li>LLM Span 抽取</li>
-              <li>Source Grounding 定位</li>
-              <li>补抽 / 角色声线</li>
-            </ol>
-          </section>
-
-          <section className="control-section runtime-section">
-            <div className="section-heading-row">
-              <h2>当前任务日志</h2>
-              <span id="logCountBadge" className="mini-badge">0</span>
-            </div>
-            <div id="runtimeLogs" className="runtime-logs empty-state">尚未运行。</div>
-          </section>
-        </aside>
-
-        <section className="workspace">
-          <div id="statusBar" className="status-bar">请先上传 TXT，或在上传浮窗中粘贴文本。</div>
-
-          <section className="comparison-grid">
-            <article className="card panel source-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Source TXT</p>
-                  <h2>原文可视化</h2>
-                </div>
-                <div className="legend">
-                  <span><i className="dot candidate"></i>标题候选</span>
-                  <span><i className="dot accepted"></i>真章节标题</span>
-                  <span><i className="dot selected"></i>当前章节范围</span>
-                  <span><i className="dot tts-narration"></i>TTS 旁白高亮</span>
-                  <span><i className="dot span-all"></i>全部 dialogue spans</span>
-                  <span><i className="dot span"></i>当前 span 定位</span>
-                </div>
-              </div>
-              <div id="sourceVisualization" className="source-visualization empty-state">
-                暂无文本。点击右上角「上传 TXT」。
-              </div>
-            </article>
-
-            <article className="card panel result-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Pipeline Inspector</p>
-                  <h2>章节 / Chunk / Span 定位</h2>
-                  <p className="panel-subtitle">选择章节或 chunk 查看 LLM 抽取的 dialogue spans；点击 span 可在左侧原文定位。</p>
-                </div>
-                <button id="exportJsonBtn" className="btn btn-ghost small" disabled>导出 JSON</button>
-              </div>
-              <div id="resultVisualization" className="result-visualization empty-state">
-                运行完整 Pipeline 后，这里会展示流程统计、章节/Chunk 导航、span 列表和定位状态。
-              </div>
-            </article>
-          </section>
-
-          <section className="card panel bottom-panel">
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Validation & Roles</p>
-                <h2>章节判断与角色别名</h2>
-              </div>
-              <div className="candidate-toolbar" role="tablist" aria-label="候选筛选">
-                <button className="filter-chip active" data-filter="all">全部标题 <span id="countAll">0</span></button>
-                <button className="filter-chip" data-filter="accepted">真章节 <span id="countAccepted">0</span></button>
-                <button className="filter-chip" data-filter="rejected">非章节 <span id="countRejected">0</span></button>
-              </div>
-            </div>
-            <div id="candidateTable" className="candidate-table empty-state">暂无结果。</div>
-          </section>
+          {/* 邮箱未经验证, 必须如实告知 —— 任何人填同一邮箱都能看到这些项目 */}
+          <p className="privacy-note">
+            <strong>隐私提示</strong>
+            邮箱不做验证，任何人填写同一邮箱都能查看该邮箱下的项目。
+            请勿上传敏感内容或未公开的独家版权作品。
+          </p>
         </section>
       </main>
+    );
+  }
 
-      <div id="uploadModal" className="modal-backdrop" aria-hidden="true">
-        <div className="modal" role="dialog" aria-modal="true" aria-labelledby="uploadTitle">
-          <div className="modal-header">
-            <div>
-              <p className="eyebrow">Upload</p>
-              <h2 id="uploadTitle">上传 / 粘贴 TXT</h2>
-            </div>
-            <button id="closeUploadBtn" className="icon-btn" aria-label="关闭">×</button>
-          </div>
-
-          <div id="dropZone" className="drop-zone">
-            <input id="fileInput" type="file" accept=".txt,text/plain" />
-            <div className="drop-zone-content">
-              <strong>拖拽 TXT 文件到这里</strong>
-              <span>或点击选择文件。也可以在下方直接粘贴文本。</span>
-            </div>
-          </div>
-
-          <div className="encoding-row">
-            <span className="auto-encoding-label">编码自动识别</span>
-            <span id="fileNamePreview" className="file-name-preview">未选择文件</span>
-          </div>
-
-          <label className="paste-label" htmlFor="pasteTextarea">文本内容</label>
-          <textarea id="pasteTextarea" placeholder={'在这里粘贴小说 TXT 内容，例如：\n第1章：转学生\n她说：你好。'}></textarea>
-
-          <div className="modal-actions">
-            <button id="loadSampleBtn" className="btn btn-ghost">填入示例</button>
-            <button id="clearTextBtn" className="btn btn-ghost">清空</button>
-            <button id="applyTextBtn" className="btn btn-primary">载入文本</button>
-          </div>
+  return (
+    <main className="page">
+      <div className="page-header dashboard-header">
+        <div>
+          <p className="eyebrow">多播电子书测试系统</p>
+          <h1>我的项目</h1>
+          <p className="sub">查看处理进度，继续浏览已完成的章节结果。</p>
+        </div>
+        <div className="page-actions">
+          <span className="account-label">{email}</span>
+          <button className="btn btn-ghost small" onClick={signOut}>切换邮箱</button>
+          <Link className="btn btn-primary" href="/projects/new">新建项目</Link>
         </div>
       </div>
-    </div>
+
+      {error && <Alert kind="error">{error}</Alert>}
+
+      {busy && !projects.length ? (
+        <div className="empty"><span className="spinner-inline" /> 加载中…</div>
+      ) : projects.length === 0 ? (
+        <div className="card empty">
+          <h2>还没有项目</h2>
+          <p className="sub">上传整本小说自动拆章，或直接提交已经切分好的章节文本。</p>
+          <Link className="btn btn-primary" href="/projects/new" style={{ marginTop: 16 }}>创建第一个项目</Link>
+        </div>
+      ) : (
+        <section className="project-section">
+          <div className="section-bar">
+            <div>
+              <h2>项目记录</h2>
+              <span>{projects.length} 个项目</span>
+            </div>
+            <span className="section-hint">点击项目查看章节和拆分结果</span>
+          </div>
+          <div className="project-list">
+            {projects.map((project) => {
+              const deleting = deletingProjectId === project.id;
+              return (
+                <div key={project.id} className={`project-row ${deleting ? 'deleting' : ''}`}>
+                  <Link href={`/projects/${project.id}`} className="project-row-link" aria-label={`查看项目 ${project.title}`}>
+                    <div className="project-main">
+                      <div className="title">{project.title}</div>
+                      <div className="meta">
+                        <span>{project.source_mode === 'whole_book' ? '整本上传' : '逐章上传'}</span>
+                        <span>{new Date(project.created_at).toLocaleString('zh-CN')}</span>
+                      </div>
+                    </div>
+                    <div className="project-progress">
+                      <div className="project-progress-copy">
+                        <span>
+                          {project.chapters_total > 0
+                            ? `${project.chapters_done} / ${project.chapters_total} 章`
+                            : '等待拆章'}
+                        </span>
+                        {project.chapters_failed > 0 && <em>{project.chapters_failed} 章失败</em>}
+                      </div>
+                      {project.chapters_total > 0 && (
+                        <ProgressBar
+                          done={project.chapters_done}
+                          failed={project.chapters_failed}
+                          total={project.chapters_total}
+                        />
+                      )}
+                    </div>
+                    <StatusBadge status={project.status} />
+                    <span className="row-arrow" aria-hidden="true">→</span>
+                  </Link>
+                  <button
+                    type="button"
+                    className="project-delete-btn"
+                    onClick={() => setDeleteTarget(project)}
+                    disabled={deleting}
+                    aria-label={`删除项目 ${project.title}`}
+                    title="删除项目"
+                  >
+                    {deleting ? <span className="spinner-inline" /> : '删除'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {deleteTarget && (
+        <div
+          className="confirm-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deletingProjectId) setDeleteTarget(null);
+          }}
+        >
+          <section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="deleteProjectTitle">
+            <p className="eyebrow">Delete project</p>
+            <h2 id="deleteProjectTitle">删除“{deleteTarget.title}”？</h2>
+            <p>
+              删除后将一并清除小说原文、章节结果、处理任务、调用记录和相关反馈，
+              且无法恢复。
+            </p>
+            <div className="confirm-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setDeleteTarget(null)}
+                disabled={Boolean(deletingProjectId)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => void deleteSelectedProject()}
+                disabled={Boolean(deletingProjectId)}
+              >
+                {deletingProjectId ? '删除中…' : '确认删除'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+    </main>
   );
 }

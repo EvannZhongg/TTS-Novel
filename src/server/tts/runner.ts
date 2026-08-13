@@ -2,7 +2,7 @@ import { Chapterizer, Chunker, findQuoteSpanCandidates, NovelTextPreprocessor } 
 import { SourceGrounder } from './grounding';
 import { createLLMClient, renderPrompt } from './llm';
 import { jsonSafeCopy } from './utils';
-import type { AnyRecord, Chapter, ChapterTitleCandidate, LLMJsonRequest, PipelineRunRequest, ProgressCallback, QuoteSpanCandidate, Settings } from './types';
+import type { AnyRecord, Chapter, ChapterTitleCandidate, LLMClient, LLMJsonRequest, LLMMetricSink, PipelineRunRequest, ProgressCallback, QuoteSpanCandidate, Settings } from './types';
 import {
   bindRoleRegistryToFinalSpans,
   buildMinorRoleProfileGroups,
@@ -21,6 +21,7 @@ import {
   mergeGenderVotesFromDialogueSpans,
   missingQuoteSpanCandidates,
   normalizeGender,
+  pipelineConfigSnapshot,
   quoteRecoveryToLlmResult,
   repairGroundedQuoteBoundaries,
   roleRegistryFromProfileGeneration,
@@ -37,12 +38,16 @@ export class PipelineRunner {
   readonly chapterizer = new Chapterizer();
   readonly chunker: Chunker;
   readonly grounder: SourceGrounder;
-  readonly llm;
+  readonly llm: LLMClient;
 
   constructor(
     private readonly settings: Settings,
     private readonly progressCallback?: ProgressCallback,
     private readonly chapterCompletedCallback?: ChapterCompletedCallback,
+    /** 仅测试用: 注入 cassette 客户端做等价性比对, 生产环境不要传 */
+    llmOverride?: LLMClient,
+    /** LLM 调用观测回调; runner 自己不落库, 交给 worker 处理 */
+    metricSink?: LLMMetricSink,
   ) {
     this.chunker = new Chunker(settings.pipeline.chunkMaxChars, settings.pipeline.chunkOverlapChars);
     this.grounder = new SourceGrounder({
@@ -51,7 +56,7 @@ export class PipelineRunner {
       ambiguityMargin: settings.pipeline.groundingAmbiguityMargin,
       evidenceWindowChars: settings.pipeline.groundingEvidenceWindowChars,
     });
-    this.llm = createLLMClient(settings.llm);
+    this.llm = llmOverride ?? createLLMClient(settings.llm, metricSink);
   }
 
   private emitProgress(stage: string, message: string, data: AnyRecord = {}): void {
@@ -63,7 +68,8 @@ export class PipelineRunner {
     const requestId = `llm_${String(this.llmRequestCounter).padStart(4, '0')}`;
     const contextPayload = jsonSafeCopy(context);
     try {
-      const result = await this.llm.generateJson(request);
+      // purpose 用于 llm_calls 的分类统计; 它不进上游请求体
+      const result = await this.llm.generateJson({ ...request, purpose });
       this.emitProgress(stage, 'LLM 请求完成', { event_type: 'llm_response', llm_request_id: requestId, llm_purpose: purpose, llm_context: contextPayload, llm_response: jsonSafeCopy(result) });
       return result;
     } catch (error) {
@@ -95,6 +101,7 @@ export class PipelineRunner {
       chapters = chapters.filter((chapter) => set.has(chapter.chapter_id));
     }
     this.emitProgress('chapter_split', '章节拆分完成', { chapter_count: chapters.length });
+    const configSnapshot = pipelineConfigSnapshot(this.settings);
     this.chapterCompletedCallback?.({
       type: 'init',
       book_title: request.book_title,
@@ -102,20 +109,7 @@ export class PipelineRunner {
       note: 'Partial pipeline result for frontend progressive rendering.',
       preprocessing: beforeSplit.stats,
       chapter_title_detection: titleValidation,
-      concurrency: { max_parallel_chapters: Math.max(1, this.settings.pipeline.maxParallelChapters), chapter_chunks_are_serial: true },
-      grounding: {
-        enabled: this.settings.pipeline.groundingEnabled,
-        fuzzy_min_score: this.settings.pipeline.groundingFuzzyMinScore,
-        evidence_fuzzy_min_score: this.settings.pipeline.groundingEvidenceFuzzyMinScore,
-        ambiguity_margin: this.settings.pipeline.groundingAmbiguityMargin,
-        evidence_window_chars: this.settings.pipeline.groundingEvidenceWindowChars,
-      },
-      quote_span_recovery: {
-        enabled: this.settings.pipeline.quoteSpanRecoveryEnabled,
-        context_chars: this.settings.pipeline.quoteSpanRecoveryContextChars,
-        batch_size: this.settings.pipeline.quoteSpanRecoveryBatchSize,
-        boundary_repair_enabled: this.settings.pipeline.quoteSpanRecoveryEnabled,
-      },
+      ...configSnapshot,
       chapters: chapters.map((chapter) => ({
         chapter_id: chapter.chapter_id,
         title: chapter.title,
@@ -144,20 +138,7 @@ export class PipelineRunner {
       note: 'Minimal pipeline returns LLM dialogue spans with source grounding, quote boundary repair, optional quote recovery, and TTS narration/dialogue segments.',
       preprocessing: beforeSplit.stats,
       chapter_title_detection: titleValidation,
-      concurrency: { max_parallel_chapters: Math.max(1, this.settings.pipeline.maxParallelChapters), chapter_chunks_are_serial: true },
-      grounding: {
-        enabled: this.settings.pipeline.groundingEnabled,
-        fuzzy_min_score: this.settings.pipeline.groundingFuzzyMinScore,
-        evidence_fuzzy_min_score: this.settings.pipeline.groundingEvidenceFuzzyMinScore,
-        ambiguity_margin: this.settings.pipeline.groundingAmbiguityMargin,
-        evidence_window_chars: this.settings.pipeline.groundingEvidenceWindowChars,
-      },
-      quote_span_recovery: {
-        enabled: this.settings.pipeline.quoteSpanRecoveryEnabled,
-        context_chars: this.settings.pipeline.quoteSpanRecoveryContextChars,
-        batch_size: this.settings.pipeline.quoteSpanRecoveryBatchSize,
-        boundary_repair_enabled: this.settings.pipeline.quoteSpanRecoveryEnabled,
-      },
+      ...configSnapshot,
       aliases,
       role_voice_profile_generation: roleVoiceProfileGeneration,
       role_registry: roleRegistry,
@@ -168,7 +149,7 @@ export class PipelineRunner {
     };
   }
 
-  private async processChapters({ bookTitle, chapters }: { bookTitle: string; chapters: Chapter[] }): Promise<AnyRecord[]> {
+  async processChapters({ bookTitle, chapters }: { bookTitle: string; chapters: Chapter[] }): Promise<AnyRecord[]> {
     const maxParallel = Math.max(1, this.settings.pipeline.maxParallelChapters);
     this.emitProgress('chapter_concurrency', '章节并发配置已生效', { max_parallel_chapters: maxParallel, chapter_count: chapters.length });
     const results = new Array<AnyRecord>(chapters.length);
@@ -186,7 +167,7 @@ export class PipelineRunner {
     return results;
   }
 
-  private async processChapter({ bookTitle, chapter }: { bookTitle: string; chapter: Chapter }): Promise<AnyRecord> {
+  async processChapter({ bookTitle, chapter }: { bookTitle: string; chapter: Chapter }): Promise<AnyRecord> {
     this.emitProgress('chapter_processing', '开始处理章节', { chapter_id: chapter.chapter_id, title: chapter.title });
     const chapterCleaning = this.preprocessor.cleanChapterText(chapter.text);
     const chapterText = chapterCleaning.text;
@@ -374,7 +355,7 @@ export class PipelineRunner {
     return this.generateJsonWithLog({ request: { systemPrompt: '你是小说多角色 TTS 引号候选对白验证助手。你必须只返回 JSON 对象。', userPrompt, responseFormatJson: true }, purpose: 'quote_span_recovery', stage: 'quote_recovery', context: { book_title: args.bookTitle, chapter_title: args.chapterTitle, chunk_id: args.chunkId, target_text_chars: args.targetText.length, quote_candidate_count: args.quoteCandidates.length, known_alias_count: (args.knownAliases ?? []).length } });
   }
 
-  private async buildRoleRegistry({ bookTitle, aliases, chapters }: { bookTitle: string; aliases: AnyRecord[]; chapters: AnyRecord[] }): Promise<AnyRecord> {
+  async buildRoleRegistry({ bookTitle, aliases, chapters }: { bookTitle: string; aliases: AnyRecord[]; chapters: AnyRecord[] }): Promise<AnyRecord> {
     const roleInputs = buildRoleProfileInputs(aliases, chapters, Math.max(1, this.settings.pipeline.roleVoiceProfileEvidenceMaxChars));
     if (!roleInputs.length) return { enabled: this.settings.pipeline.roleVoiceProfileEnabled, status: 'empty', role_registry: [] };
     if (!this.settings.pipeline.roleVoiceProfileEnabled) return { enabled: false, status: 'disabled_fallback', role_registry: fallbackRoleRegistry(roleInputs, 'role voice profile disabled') };

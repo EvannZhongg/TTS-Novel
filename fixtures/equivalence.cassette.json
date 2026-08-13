@@ -1,0 +1,249 @@
+[
+  {
+    "key": "bf16591ea6d45b6689d7dcc280d2e41c",
+    "response": {
+      "candidates": [
+        {
+          "is_chapter_title": true,
+          "normalized_title": "第1章 穿越成妃",
+          "confidence": 0.98,
+          "reason": "标准章节标题，独占一行且后接正文起始"
+        },
+        {
+          "is_chapter_title": true,
+          "normalized_title": "第2章 受伤的火哥儿",
+          "confidence": 0.98,
+          "reason": "标准章节标题，前为上一章结尾，后接新正文"
+        }
+      ]
+    }
+  },
+  {
+    "key": "7585a66c68d0bf3428aef42dc8c761b6",
+    "response": {
+      "dialogue_spans": [
+        {
+          "speaker": "其嬷嬷",
+          "speaker_gender": "female",
+          "alias_used": "",
+          "dialogue_text": "快，快去叫大夫！",
+          "evidence_before": "外面，传来一声巨响，伴随着一声惨烈的痛叫声。",
+          "evidence_after": "门外，传来了其嬷嬷急促而凌乱的声音。",
+          "emotion": "急促地，声音凌乱",
+          "confidence": 0.8
+        },
+        {
+          "speaker": "元卿凌",
+          "speaker_gender": "female",
+          "alias_used": "",
+          "dialogue_text": "不许动！",
+          "evidence_before": "元卿凌见状，也不顾身体各处都疼痛，快步走了出去，",
+          "evidence_after": "其嬷嬷吓了一跳，回头见是她，没好气地道：",
+          "emotion": "命令式地，急促",
+          "confidence": 1
+        },
+        {
+          "speaker": "其嬷嬷",
+          "speaker_gender": "female",
+          "alias_used": "王妃",
+          "dialogue_text": "没王妃什么事，王妃回去吧。",
+          "evidence_before": "其嬷嬷吓了一跳，回头见是她，没好气地道：",
+          "evidence_after": "",
+          "emotion": "没好气地",
+          "confidence": 1
+        },
+        {
+          "speaker": "元卿凌",
+          "speaker_gender": "female",
+          "alias_used": "",
+          "dialogue_text": "镊子，棉花，针，烈酒，再以乌头、莨菪子、麻蕡、羊踯躅，曼陀罗花熬汤拿上来，要快！",
+          "evidence_before": "元卿凌拉开其嬷嬷，沉稳地吩咐道。",
+          "evidence_after": "",
+          "emotion": "沉稳而急促地",
+          "confidence": 1
+        },
+        {
+          "speaker": "其嬷嬷",
+          "speaker_gender": "female",
+          "alias_used": "",
+          "dialogue_text": "你别碰我孙子。",
+          "evidence_before": "其嬷嬷一把推开她，狂怒地道：",
+          "evidence_after": "",
+          "emotion": "狂怒地",
+          "confidence": 1
+        },
+        {
+          "speaker": "元卿凌",
+          "speaker_gender": "female",
+          "alias_used": "",
+          "dialogue_text": "你等到大夫……",
+          "evidence_before": "其嬷嬷一把推开她，狂怒地道：“你别碰我孙子。”",
+          "evidence_after": "",
+          "emotion": "急切地，未说完",
+          "confidence": 0.6
+        }
+      ],
+      "aliases": []
+    }
+  },
+  {
+    "key": "4dd55a0be82beabd6458d61ef50c77e7",
+    "response": {
+      "dialogue_spans": [
+        {
+          "speaker": "宇文皓",
+          "speaker_gender": "male",
+          "alias_used": "元卿凌",
+          "dialogue_text": "元卿凌，本王如你所愿与你圆房，可从今往后，本王与你形同陌路。",
+          "evidence_before": "一巴掌劈向她的脸，夹着玉碎般的冷意",
+          "evidence_after": "元卿凌笑了起来，笑得绝望悲凉",
+          "emotion": "语气冰冷，透着决绝",
+          "confidence": 0.98
+        },
+        {
+          "speaker": "元卿凌",
+          "speaker_gender": "female",
+          "alias_used": "",
+          "dialogue_text": "你果然恨我。",
+          "evidence_before": "元卿凌笑了起来，笑得绝望悲凉",
+          "evidence_after": "出嫁之前，母亲教过她为人妇应该知道的事情",
+          "emotion": "绝望地，带着惨笑",
+          "confidence": 0.98
+        },
+        {
+          "speaker": "宇文皓",
+          "speaker_gender": "male",
+          "alias_used": "本王",
+          "dialogue_text": "恨？你不配，本王只是厌恶你，在本王眼中，你便如那逐臭的蝇虫，叫人憎恶，否则，本王也不需要喝药才来与你圆房。",
+          "evidence_before": "他声音裹着冷意，凤眼尽是鄙夷",
+          "evidence_after": "他旋风般出了去，她看着青袍消失在门口",
+          "emotion": "语气鄙夷，透着厌恶",
+          "confidence": 0.98
+        },
+        {
+          "speaker": "宇文皓",
+          "speaker_gender": "male",
+          "alias_used": "",
+          "dialogue_text": "以后不必把她当主子看，只当我楚王府多养了一条狗。",
+          "evidence_before": "他的声音远远地传来",
+          "evidence_after": "痛，真痛啊，她如愿以偿与他圆房了",
+          "emotion": "语气冷酷，透着轻蔑",
+          "confidence": 0.98
+        },
+        {
+          "speaker": "unknown_speaker",
+          "speaker_gender": "female",
+          "alias_used": "王妃",
+          "dialogue_text": "王妃自尽了……",
+          "evidence_before": "凤仪宫中，传出侍女的惊叫声。",
+          "evidence_after": "黑沉笼罩着凤仪阁，其嬷嬷送了大夫出去",
+          "emotion": "惊慌地，尖声",
+          "confidence": 0.95
+        },
+        {
+          "speaker": "unknown_speaker",
+          "speaker_gender": "female",
+          "alias_used": "王妃",
+          "dialogue_text": "王妃若要死，等王爷休了你回去再死，休得脏了王府的地，再给王爷沾了晦气。",
+          "evidence_before": "其嬷嬷送了大夫出去，转身寒着脸进了屋中。",
+          "evidence_after": "",
+          "emotion": "冷着脸，语气刻薄",
+          "confidence": 0.95
+        }
+      ],
+      "aliases": []
+    }
+  },
+  {
+    "key": "0fedf3d14a2be2f8500fd6b495a97914",
+    "response": {
+      "dialogue_spans": [
+        {
+          "speaker": "unknown_speaker",
+          "speaker_gender": "unknown",
+          "alias_used": "",
+          "dialogue_text": "不必把她当主子看待，便当我楚王府多养了一条狗。",
+          "evidence_before": "元卿凌被推跌在地上，脑子里有一句冰冷的话在回荡",
+          "evidence_after": "她只是一条狗，自然，下人们也不会尊重她。",
+          "emotion": "语气冰冷，带着轻蔑",
+          "confidence": 0.95
+        }
+      ],
+      "aliases": []
+    }
+  },
+  {
+    "key": "a0eaa4aa760a3e58a762be830860629f",
+    "response": {
+      "dialogue_spans": [
+        {
+          "speaker": "元卿凌",
+          "speaker_gender": "female",
+          "alias_used": "",
+          "dialogue_text": "水……",
+          "evidence_before": "元卿凌慢慢地睁开眼睛，看着眼前这个满脸凶恶的妇女。",
+          "evidence_after": "她嗓子干得要命，简直快冒烟了。",
+          "emotion": "虚弱嘶哑，干渴地",
+          "confidence": 0.95
+        },
+        {
+          "speaker": "其嬷嬷",
+          "speaker_gender": "female",
+          "alias_used": "",
+          "dialogue_text": "有本事去死，就有本事自己倒水喝。",
+          "evidence_before": "",
+          "evidence_after": "说完，厌恶地看了她一眼，呸了一声便出去了。",
+          "emotion": "语气嫌恶，刻薄地",
+          "confidence": 0.9
+        }
+      ],
+      "aliases": []
+    }
+  },
+  {
+    "key": "ac2517691488b9496e115fbd0acafd56",
+    "response": {
+      "candidates": [
+        {
+          "is_dialogue": false,
+          "speaker": "unknown_speaker",
+          "speaker_gender": "unknown",
+          "alias_used": "",
+          "dialogue_text": "",
+          "emotion": "平稳叙述",
+          "confidence": 0.95,
+          "reason": "引号内为叙述中对‘轻薄’一词的引用，属于概念引用，非角色对白。"
+        }
+      ],
+      "aliases": []
+    }
+  },
+  {
+    "key": "4c15fff20b27618a9f448fdc1303d868",
+    "response": {
+      "voice_profiles": [
+        {
+          "canonical_name": "宇文皓",
+          "gender": "male",
+          "age_group": "青年",
+          "description": "青年男性，声线低沉偏冷，音色清冽，吐字清晰，语速中等偏慢，气质沉稳威严",
+          "confidence": 0.8
+        },
+        {
+          "canonical_name": "元卿凌",
+          "gender": "female",
+          "age_group": "青年",
+          "description": "青年女性，音色清亮，吐字清晰，语速中等，声线沉稳干练，带有韧性",
+          "confidence": 0.85
+        },
+        {
+          "canonical_name": "其嬷嬷",
+          "gender": "female",
+          "age_group": "老年",
+          "description": "老年女性，音色偏粗哑，声线硬朗，语速较快，带着尖刻气质",
+          "confidence": 0.75
+        }
+      ]
+    }
+  }
+]

@@ -237,7 +237,6 @@ ADMIN_TOKEN=                         # /api/v1/llm/test 需要
 - **Vercel Hobby 的 cron 只有天级粒度**。当前队列靠前端页面驱动
   (项目页轮询时并发调用 `process-next`),用户关掉页面后进度会停在原处,
   下次打开继续。分钟级的无人值守推进需要 Pro 计划的 cron。
-- 邮箱未验证,demo 项目非私密。
 - 极端长章(单章上万字 → 多 chunk × 每 chunk 一次 LLM)有超时风险,
   worker 会记录 `duration_ms` 并在超阈值时告警,但暂未拆到 chunk 级任务。
 - 日志表(`job_events` / `llm_calls`)保留 14 天,由 `prune_logs()` 清理,

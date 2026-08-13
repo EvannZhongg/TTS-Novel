@@ -312,6 +312,28 @@ button, input, textarea, select { font: inherit; }
 .section-bar span { color: var(--muted); font-size: 12px; }
 .section-hint { text-align: right; }
 .section-bar > .section-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.project-view-toggle {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #eef2f7;
+}
+.project-view-toggle button {
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 13px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.project-view-toggle button.active {
+  background: #fff;
+  color: var(--primary);
+  box-shadow: 0 2px 7px rgba(15, 23, 42, 0.1);
+}
 
 /* 项目列表 */
 .project-section { margin-top: 28px; }
@@ -432,6 +454,41 @@ button, input, textarea, select { font: inherit; }
 }
 .overview-title { font-size: 18px; }
 .failed-copy { margin-left: 10px; color: var(--red); font-size: 13px; }
+.overview-side {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.overview-usage {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+}
+.overview-usage > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 13px;
+}
+.overview-usage > div:first-child { padding-left: 0; }
+.overview-usage > div + div { border-left: 1px solid var(--border); }
+.overview-usage dt {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.overview-usage dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.overview-processing { white-space: nowrap; }
 .inline-metrics {
   display: flex;
   align-items: stretch;
@@ -657,6 +714,124 @@ button, input, textarea, select { font: inherit; }
 .chapter-item .stat { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .chapter-item.is-failed { background: #fff7f7; }
 .chapter-item.is-running { background: #f4f8ff; }
+
+/* 项目人物与音色 */
+.project-role-view { min-height: 180px; }
+.role-refreshing {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.project-role-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+.project-role-card {
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
+  gap: 15px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  background: var(--surface);
+  box-shadow: 0 7px 20px rgba(15, 23, 42, 0.035);
+}
+.project-role-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.project-role-head > div:first-child {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  gap: 8px;
+}
+.project-role-index {
+  flex: 0 0 auto;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.project-role-head h3 {
+  min-width: 0;
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.project-role-tags {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.project-role-tags span {
+  border-radius: 999px;
+  padding: 4px 7px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.project-role-voice {
+  padding: 13px 14px;
+  border-radius: 9px;
+  background: #f8fafc;
+}
+.project-role-voice > span,
+.project-role-aliases > span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.project-role-voice p {
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.project-role-aliases {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.project-role-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) repeat(2, minmax(72px, 0.65fr));
+  align-self: end;
+  margin: 0;
+  padding-top: 13px;
+  border-top: 1px solid var(--border);
+}
+.project-role-meta > div { min-width: 0; padding: 0 10px; }
+.project-role-meta > div:first-child { padding-left: 0; }
+.project-role-meta > div:last-child { padding-right: 0; }
+.project-role-meta > div + div { border-left: 1px solid var(--border); }
+.project-role-meta dt { color: var(--muted); font-size: 9px; }
+.project-role-meta dd {
+  overflow: hidden;
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* 上传 */
 .upload-form { overflow: hidden; }
@@ -1123,6 +1298,11 @@ button, input, textarea, select { font: inherit; }
   .identity-row .btn { width: 100%; }
   .section-hint { display: none; }
   .section-actions { width: 100%; justify-content: flex-end; }
+  .project-view-toggle { flex: 1; }
+  .project-view-toggle button { flex: 1; }
+  .project-role-grid { grid-template-columns: 1fr; }
+  .project-role-card { padding: 16px; }
+  .project-role-meta { grid-template-columns: minmax(0, 1.15fr) repeat(2, minmax(62px, 0.7fr)); }
   .project-row { align-items: stretch; }
   .project-row-link { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 16px 8px 16px 16px; }
   .project-main { grid-column: 1; }
@@ -1134,7 +1314,17 @@ button, input, textarea, select { font: inherit; }
   .inline-metrics > div + div { border-left: 0; }
   .inline-metrics > div:nth-child(even) { border-left: 1px solid var(--border); }
   .inline-metrics > div:nth-child(n + 3) { border-top: 1px solid var(--border); }
-  .usage-metrics > div:first-child { padding-left: 20px; }
+  .overview-side { width: 100%; justify-content: flex-start; }
+  .overview-usage { width: 100%; justify-content: space-between; }
+  .overview-usage > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    padding: 0 10px;
+  }
+  .overview-usage > div:first-child { padding-left: 0; }
+  .overview-usage > div:last-child { padding-right: 0; }
   .chapter-result-layout { grid-template-columns: 1fr; }
   .chapter-insights {
     position: static;

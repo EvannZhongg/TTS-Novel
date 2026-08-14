@@ -1088,6 +1088,26 @@ button, input, textarea, select { font: inherit; }
 .dialogue-head { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; font-size: 13px; }
 .dialogue-head .who { font-weight: 750; }
 .dialogue-text { min-width: 0; color: #293548; line-height: 1.8; overflow-wrap: anywhere; }
+.speaker-edit-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 2px 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+.speaker-edit-trigger span { color: var(--primary); font-size: 10px; }
+.speaker-edit-trigger:hover:not(:disabled) { background: var(--primary-soft); color: var(--primary); }
+.speaker-edit-trigger:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.speaker-edit-trigger:disabled { cursor: default; opacity: 0.72; }
+.badge.corrected { background: #ecfdf5; color: #047857; }
 
 /* 简洁原文高亮：只保留句子定位与点击强调 */
 .chapter-visualization {
@@ -1214,6 +1234,42 @@ button, input, textarea, select { font: inherit; }
   font-size: 13px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+.sentence-popover-field {
+  display: grid;
+  gap: 7px;
+}
+.sentence-popover-field > span,
+.sentence-popover-note,
+.sentence-popover-saving {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+.sentence-popover-field select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 30px 8px 9px;
+  background: #fff;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 750;
+}
+.sentence-popover-field select:focus { border-color: var(--primary); outline: 2px solid var(--primary-soft); }
+.sentence-popover-note {
+  margin: 8px 0 0;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.sentence-popover-saving { display: flex; align-items: center; gap: 6px; margin: 9px 0 0; }
+.sentence-popover-field + .sentence-popover-row,
+.sentence-popover-note + .sentence-popover-row {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid #edf1f6;
 }
 @keyframes sentencePopoverIn {
   from { opacity: 0; transform: translateY(3px) scale(0.98); }

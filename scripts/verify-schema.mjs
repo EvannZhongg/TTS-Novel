@@ -29,6 +29,7 @@ console.log('\n[1] 表');
 const wantTables = [
   'demo_users', 'projects', 'project_sources', 'chapters',
   'chapter_upload_batches', 'jobs', 'job_events', 'feedback',
+  'speaker_assignments', 'speaker_change_logs',
 ];
 const tables = (await client.query("select tablename from pg_tables where schemaname='public'")).rows.map((r) => r.tablename);
 for (const t of wantTables) (tables.includes(t) ? ok : bad)(`表 ${t}`);
@@ -48,6 +49,8 @@ for (const [t, c] of [
   ['projects', 'next_chapter_index'], ['projects', 'create_request_id'],
   ['project_sources', 'raw_text'],
   ['jobs', 'lease_expires_at'], ['jobs', 'run_after'], ['jobs', 'attempts'], ['jobs', 'target_revision'],
+  ['speaker_assignments', 'target_role_snapshot'], ['speaker_assignments', 'target_role_key'],
+  ['speaker_change_logs', 'old_role_snapshot'], ['speaker_change_logs', 'new_role_snapshot'],
 ]) (hasCol(t, c) ? ok : bad)(`${t}.${c}`);
 (hasCol('feedback', 'rating') ? bad : ok)('feedback.rating 已移除');
 
@@ -59,6 +62,7 @@ for (const i of [
   'jobs_one_active_chapter_idx', 'jobs_one_active_chapterize_idx',
   'demo_users_email_lower_key', 'chapters_project_source_hash_key',
   'projects_user_create_request_key',
+  'speaker_assignments_project_idx', 'speaker_change_logs_project_idx',
 ]) (idx.includes(i) ? ok : bad)(`索引 ${i}`);
 
 // -------------------------------------------------------------------- 4. RLS
@@ -87,6 +91,7 @@ for (const f of [
   'requeue_failed_chapters', 'append_chapter_batch', 'commit_chapterize_result',
   'create_per_chapter_project',
   'save_chapter_enrichment_batch',
+  'set_speaker_assignment',
   'mark_aggregate_running', 'mark_aggregate_failed', 'requeue_aggregate', 'touch_updated_at',
 ])
   (fns.includes(f) ? ok : bad)(`函数 ${f}`);
@@ -234,6 +239,27 @@ try {
     "insert into llm_calls (project_id,chapter_id,job_id,purpose,status,attempt) values ($1,$2,$3,'probe','ok',1)",
     [p, c, j],
   );
+  const assignment = (await client.query(
+    `insert into speaker_assignments (
+       project_id,chapter_id,segment_id,segment_text,original_speaker,target_role_key,
+       target_role_snapshot,changed_by
+     ) values ($1,$2,'segment-1','hello','unknown_speaker','role-1',$3,$4)
+     returning id`,
+    [p, c, JSON.stringify({ role_id: 'role-1', canonical_name: '角色一' }), u],
+  )).rows[0].id;
+  await client.query(
+    `insert into speaker_change_logs (
+       assignment_id,project_id,chapter_id,segment_id,old_role_snapshot,new_role_snapshot,changed_by
+     ) values ($1,$2,$3,'segment-1',$4,$5,$6)`,
+    [
+      assignment,
+      p,
+      c,
+      JSON.stringify({ canonical_name: 'unknown_speaker' }),
+      JSON.stringify({ role_id: 'role-1', canonical_name: '角色一' }),
+      u,
+    ],
+  );
 
   await client.query('delete from projects where id=$1', [p]);
 
@@ -246,6 +272,8 @@ try {
     ['job_events', 'project_id'],
     ['feedback', 'project_id'],
     ['llm_calls', 'project_id'],
+    ['speaker_assignments', 'project_id'],
+    ['speaker_change_logs', 'project_id'],
   ]) {
     const count = Number((await client.query(`select count(*) from ${table} where ${column}=$1`, [p])).rows[0].count);
     (count === 0 ? ok : bad)(`${table} 项目数据删除后剩余 ${count} 行`);
@@ -388,6 +416,79 @@ try {
   (projectCount === 1 && chapterCount === 1 ? ok : bad)(
     `项目数=${projectCount}, 章节数=${chapterCount}(均应为 1)`,
   );
+} finally {
+  await client.query('rollback');
+}
+
+// ---------------- 14. 说话人修正：人物范围限制、当前指派与日志
+console.log('\n[14] 说话人修改日志');
+await client.query('begin');
+try {
+  const u = (await client.query(
+    "insert into demo_users (email) values ('speaker-probe@test.local') on conflict (lower(email)) do update set last_seen_at=now() returning id",
+  )).rows[0].id;
+  const roleOne = { role_id: 'role-1', canonical_name: '角色一', gender: 'female', voice_profile: { description: '女声' } };
+  const roleTwo = { role_id: 'role-2', canonical_name: '角色二', gender: 'male', voice_profile: { description: '男声' } };
+  const p = (await client.query(
+    `insert into projects (user_id,title,source_mode,book_result)
+     values ($1,'speaker','whole_book',$2::jsonb) returning id`,
+    [u, JSON.stringify({ role_registry: [roleOne, roleTwo] })],
+  )).rows[0].id;
+  const c = (await client.query(
+    "insert into chapters (project_id,chapter_index,title,source_text) values ($1,1,'c1','“你好。”') returning id",
+    [p],
+  )).rows[0].id;
+
+  const first = (await client.query(
+    `select set_speaker_assignment(
+       $1,$2,'segment-1',1,4,'你好。','unknown_speaker','','role-1',$3
+     ) as r`,
+    [p, c, u],
+  )).rows[0].r;
+  const replay = (await client.query(
+    `select set_speaker_assignment(
+       $1,$2,'segment-1',1,4,'你好。','unknown_speaker','','role-1',$3
+     ) as r`,
+    [p, c, u],
+  )).rows[0].r;
+  const second = (await client.query(
+    `select set_speaker_assignment(
+       $1,$2,'segment-1',1,4,'你好。','unknown_speaker','','role-2',$3
+     ) as r`,
+    [p, c, u],
+  )).rows[0].r;
+  const counts = (await client.query(
+    `select
+       (select count(*) from speaker_assignments where chapter_id=$1) as assignments,
+       (select count(*) from speaker_change_logs where chapter_id=$1) as logs`,
+    [c],
+  )).rows[0];
+
+  (first.changed === true && first.assignment.target_role_key === 'role-1' ? ok : bad)(
+    '首次修改创建当前指派并写入角色一',
+  );
+  (replay.changed === false && replay.log_id === null ? ok : bad)(
+    '重复选择同一人物不重复写日志',
+  );
+  (second.changed === true && second.assignment.target_role_key === 'role-2' ? ok : bad)(
+    '再次修改更新当前指派为角色二',
+  );
+  (Number(counts.assignments) === 1 && Number(counts.logs) === 2 ? ok : bad)(
+    `当前指派=${counts.assignments} 条，修改日志=${counts.logs} 条(应为 1/2)`,
+  );
+
+  let rejected = false;
+  try {
+    await client.query(
+      `select set_speaker_assignment(
+         $1,$2,'segment-2',5,8,'再见。','unknown_speaker','','not-in-novel',$3
+       )`,
+      [p, c, u],
+    );
+  } catch (error) {
+    rejected = /not in current project role registry/i.test(error.message);
+  }
+  (rejected ? ok : bad)('小说人物列表之外的目标说话人被拒绝');
 } finally {
   await client.query('rollback');
 }

@@ -283,7 +283,7 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
       return;
     }
 
-    const gap = 12;
+    const gap = 8;
     const edge = 12;
     const popoverWidth = popoverRef.current?.offsetWidth ?? Math.min(240, window.innerWidth - edge * 2);
     const popoverHeight = popoverRef.current?.offsetHeight ?? 112;
@@ -302,7 +302,11 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
       );
     }
 
-    let top = placement === 'below' ? rect.bottom + 9 : rect.top - 10;
+    // 左右悬浮时，让气泡箭头对准说话人按钮的垂直中心。
+    const arrowCenterOffset = 22.5;
+    let top = placement === 'below'
+      ? rect.bottom + 8
+      : rect.top + rect.height / 2 - arrowCenterOffset;
     top = Math.min(
       Math.max(edge, top),
       Math.max(edge, window.innerHeight - popoverHeight - edge),
@@ -483,8 +487,8 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
                           type="button"
                           className="speaker-edit-trigger"
                           onClick={(event) => {
-                            const item = event.currentTarget.closest('.dialogue-item');
-                            if (item instanceof HTMLElement) anchorRef.current = item;
+                            // 以说话人按钮自身为锚点，悬浮窗紧贴名字而不是整条对白。
+                            anchorRef.current = event.currentTarget;
                             setSelectedSegment(segment.segment_id ?? null);
                           }}
                           disabled={!segment.segment_id || roles.length === 0}

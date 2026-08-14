@@ -44,6 +44,12 @@ export const appendChaptersSchema = z.object({
   chapters: z.array(chapterInputSchema).min(1),
 });
 
+export const speakerAssignmentSchema = z.object({
+  email: z.string().min(3).max(254),
+  segment_id: z.string().min(1).max(200),
+  target_role_key: z.string().min(1).max(300),
+});
+
 export const feedbackSchema = z.object({
   email: z.string().min(3).max(254).optional(),
   project_id: z.string().uuid().optional(),

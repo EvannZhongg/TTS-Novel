@@ -16,10 +16,13 @@ interface TtsSegment {
   segment_id?: string;
   type?: string;
   speaker?: string;
+  original_speaker?: string;
+  speaker_corrected?: boolean;
   emotion?: string;
   text?: string;
   start?: number;
   end?: number;
+  role_id?: string;
   voice_profile_id?: string;
   voice_profile?: { description?: string; age_group?: string; gender?: string };
 }
@@ -30,6 +33,11 @@ interface RoleEntry {
   gender?: string;
   aliases?: string[];
   voice_profile?: { description?: string; age_group?: string; confidence?: number };
+}
+
+function roleKey(role: RoleEntry): string {
+  if (role.role_id?.trim()) return role.role_id.trim();
+  return role.canonical_name?.trim() ? `name:${role.canonical_name.trim()}` : '';
 }
 
 const GENDER_LABEL: Record<string, string> = { male: '男', female: '女', unknown: '未知' };
@@ -118,6 +126,8 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
   const [resultView, setResultView] = useState<ResultView>('list');
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
   const [popoverPosition, setPopoverPosition] = useState<PopoverPosition | null>(null);
+  const [savingSegment, setSavingSegment] = useState<string | null>(null);
+  const [speakerMessage, setSpeakerMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<HTMLElement | null>(null);
 
@@ -142,16 +152,11 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
     closeSegmentPopover();
     (async () => {
       try {
-        const [chapterRes, bookRes] = await Promise.all([
-          api.getChapter(projectId, chapterId, email),
-          // 声线 profile 是全书级的, 从 book_result 取
-          api.getBookResult(projectId, email).catch(() => ({ book_result: null, status: '' })),
-        ]);
+        const chapterRes = await api.getChapter(projectId, chapterId, email);
         if (!alive) return;
         setChapter(chapterRes.chapter);
         setNavigation(chapterRes.navigation);
-        const registry = (bookRes.book_result as { role_registry?: RoleEntry[] } | null)?.role_registry;
-        setRoles(Array.isArray(registry) ? registry : []);
+        setRoles(Array.isArray(chapterRes.roles) ? chapterRes.roles : []);
       } catch (err) {
         if (alive) setError(err instanceof Error ? err.message : String(err));
       }
@@ -234,6 +239,39 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
     () => visualSlices.find((slice) => slice.key === selectedSegment) ?? null,
     [selectedSegment, visualSlices],
   );
+  const selectedRole = useMemo(() => {
+    const segment = selectedVisualSlice?.segment;
+    if (!segment) return null;
+    return roles.find((role) =>
+      (segment.role_id && role.role_id === segment.role_id)
+      || role.canonical_name === segment.speaker) ?? null;
+  }, [roles, selectedVisualSlice]);
+
+  const updateSpeaker = useCallback(async (segment: TtsSegment, targetRoleKey: string) => {
+    if (!segment.segment_id || !targetRoleKey || savingSegment) return;
+    setSavingSegment(segment.segment_id);
+    setSpeakerMessage(null);
+    try {
+      const response = await api.updateSegmentSpeaker(
+        projectId,
+        chapterId,
+        email,
+        segment.segment_id,
+        targetRoleKey,
+      );
+      setChapter((current) => current
+        ? { ...current, result: response.chapter.result }
+        : current);
+      setSpeakerMessage({
+        kind: 'ok',
+        text: response.changed ? '说话人已修改，修改日志已保存。' : '该对白已经是所选人物。',
+      });
+    } catch (err) {
+      setSpeakerMessage({ kind: 'error', text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setSavingSegment(null);
+    }
+  }, [chapterId, email, projectId, savingSegment]);
 
   const positionSegmentPopover = useCallback(() => {
     const anchor = anchorRef.current;
@@ -332,6 +370,11 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
       {!chapter.enriched && (
         <div className="chapter-alert">
           <Alert kind="warn">本章还未完成全书聚合, 角色与声线信息可能不完整。</Alert>
+        </div>
+      )}
+      {speakerMessage && (
+        <div className="chapter-alert">
+          <Alert kind={speakerMessage.kind}>{speakerMessage.text}</Alert>
         </div>
       )}
 
@@ -436,7 +479,21 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
                   <div className="dialogue-head">
                     {segment.type === 'dialogue' ? (
                       <>
-                        <span className="who">{segment.speaker || '未知'}</span>
+                        <button
+                          type="button"
+                          className="speaker-edit-trigger"
+                          onClick={(event) => {
+                            const item = event.currentTarget.closest('.dialogue-item');
+                            if (item instanceof HTMLElement) anchorRef.current = item;
+                            setSelectedSegment(segment.segment_id ?? null);
+                          }}
+                          disabled={!segment.segment_id || roles.length === 0}
+                          title={roles.length ? '点击修改说话人' : '当前小说还没有可选人物'}
+                        >
+                          {segment.speaker || '未知'}
+                          <span aria-hidden="true">⌄</span>
+                        </button>
+                        {segment.speaker_corrected && <span className="badge corrected">已修改</span>}
                         {segment.emotion && <span className="badge emotion">{segment.emotion}</span>}
                       </>
                     ) : (
@@ -505,17 +562,39 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
           ref={popoverRef}
           className={`sentence-popover ${popoverPosition.placement}`}
           style={{ top: popoverPosition.top, left: popoverPosition.left }}
-          role="status"
-          aria-live="polite"
+          role="dialog"
+          aria-label="修改说话人"
         >
-          <div className="sentence-popover-row">
+          <label className="sentence-popover-field">
             <span>人物</span>
-            <strong>{selectedVisualSlice.segment.speaker || '未知人物'}</strong>
-          </div>
+            <select
+              value={selectedRole ? roleKey(selectedRole) : ''}
+              onChange={(event) => void updateSpeaker(selectedVisualSlice.segment!, event.target.value)}
+              disabled={savingSegment === selectedVisualSlice.segment.segment_id || roles.length === 0}
+              aria-label="修改说话人"
+            >
+              <option value="" disabled>
+                {roles.length ? '选择小说人物' : '没有可选人物'}
+              </option>
+              {roles.map((role) => (
+                <option key={roleKey(role)} value={roleKey(role)}>
+                  {role.canonical_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedVisualSlice.segment.speaker_corrected && (
+            <p className="sentence-popover-note">
+              原识别：{selectedVisualSlice.segment.original_speaker || 'unknown_speaker'}
+            </p>
+          )}
           <div className="sentence-popover-row">
             <span>情感</span>
             <strong>{selectedVisualSlice.segment.emotion || '未标注'}</strong>
           </div>
+          {savingSegment === selectedVisualSlice.segment.segment_id && (
+            <p className="sentence-popover-saving"><span className="spinner-inline" /> 正在保存…</p>
+          )}
         </div>
       )}
 

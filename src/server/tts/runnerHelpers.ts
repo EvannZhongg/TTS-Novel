@@ -357,11 +357,13 @@ function buildTtsSegmentsForChapter(chapter: AnyRecord): AnyRecord {
     cursor = end;
   });
   if (cursor < chapterText.length) segments.push(ttsNarrationSegment(segments.length, chapterId, chapterTitle, cursor, chapterText.length, chapterText.slice(cursor)));
-  const summary = ttsSegmentSummary(segments);
+  const cleaned = collapseFormattingNarrationSegments(segments);
+  const summary = ttsSegmentSummary(cleaned.segments);
   summary.skipped_dialogue_span_count = skippedSpans;
   summary.source_text_chars = chapterText.length;
-  summary.coverage_ok = segmentsCoverText(segments, chapterText.length);
-  return { segments, summary };
+  summary.coverage_ok = segmentsCoverText(cleaned.segments, chapterText.length);
+  summary.formatting_narration_segments_absorbed = cleaned.absorbedCount;
+  return { segments: cleaned.segments, summary };
 }
 
 function chapterCleanTextFromChunks(chapter: AnyRecord): string {
@@ -453,6 +455,179 @@ function ttsDialogueSegment(index: number, chapterId: any, chapterTitle: string,
   return { segment_id: ttsSegmentId(chapterId, index), segment_index: index, type: 'dialogue', chapter_id: chapterId, chapter_title: chapterTitle, start, end, text, char_count: text.length, speaker: span.canonical_speaker || span.speaker || 'unknown_speaker', raw_speaker: span.speaker ?? '', speaker_gender: normalizeGender(span.speaker_gender), alias_used: span.alias_used ?? '', role_id: span.role_id ?? '', voice_profile_id: span.voice_profile_id ?? '', voice_profile: span.voice_profile ?? {}, emotion: cleanTextField(span.emotion), source: span.source ?? 'llm', status: span.status ?? '', match_score: span.match_score ?? 0, span_index: span.span_index };
 }
 
+const FORMATTING_NARRATION_RE = /^[\s"'“”‘’「」『』《》〈〉]+$/u;
+const DIRECTIONAL_OPEN_QUOTES = new Set(['“', '‘', '「', '『', '《', '〈']);
+const DIRECTIONAL_CLOSE_QUOTES = new Set(['”', '’', '」', '』', '》', '〉']);
+const SYMMETRIC_TTS_QUOTES = new Set(['"', "'"]);
+
+/**
+ * 对白 span 的坐标通常只覆盖引号内部，因此全文补齐时会生成：
+ *
+ *   旁白: “
+ *   角色: 你好。
+ *   旁白: ” “
+ *   角色: 再见。
+ *   旁白: ”
+ *
+ * 这些片段没有可朗读内容，但不能直接删坐标，否则会破坏 segment 对原文的连续
+ * 覆盖。这里把纯引号/空白片段吸收到相邻对白中；有实际文字或普通标点的旁白不动。
+ */
+export function collapseFormattingNarrationSegments(
+  input: AnyRecord[],
+): { segments: AnyRecord[]; absorbedCount: number } {
+  const working = input.map((segment) => ({ ...segment }));
+  let absorbedCount = absorbFormattingNarrationEdges(working);
+  const output: AnyRecord[] = [];
+  let index = 0;
+
+  while (index < working.length) {
+    const current = working[index];
+    if (!isFormattingNarrationSegment(current)) {
+      output.push(current);
+      index += 1;
+      continue;
+    }
+
+    let runEnd = index + 1;
+    while (runEnd < working.length && isFormattingNarrationSegment(working[runEnd])) runEnd += 1;
+    const run = working.slice(index, runEnd);
+    const previous = output.at(-1);
+    const next = working[runEnd];
+    const start = toInt(run[0]?.start, NaN);
+    const end = toInt(run.at(-1)?.end, NaN);
+    const text = run.map((segment) => String(segment.text ?? '')).join('');
+    const previousTouches = Boolean(previous) && toInt(previous?.end, NaN) === start;
+    const nextTouches = Boolean(next) && toInt(next?.start, NaN) === end;
+    const previousDialogue = previousTouches && previous?.type === 'dialogue';
+    const nextDialogue = nextTouches && next?.type === 'dialogue';
+
+    if (previousDialogue && nextDialogue) {
+      const split = formattingBridgeSplit(text);
+      appendSegmentText(previous!, text.slice(0, split), start + split);
+      prependSegmentText(next, text.slice(split), start + split);
+      absorbedCount += run.length;
+    } else if (previousDialogue) {
+      appendSegmentText(previous!, text, end);
+      absorbedCount += run.length;
+    } else if (nextDialogue) {
+      prependSegmentText(next, text, start);
+      absorbedCount += run.length;
+    } else {
+      output.push(...run);
+    }
+    index = runEnd;
+  }
+
+  return { segments: output, absorbedCount };
+}
+
+function isFormattingNarrationSegment(segment: AnyRecord): boolean {
+  const text = String(segment?.text ?? '');
+  return segment?.type === 'narration' && Boolean(text) && FORMATTING_NARRATION_RE.test(text);
+}
+
+function absorbFormattingNarrationEdges(segments: AnyRecord[]): number {
+  let absorbedEdges = 0;
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (segment?.type !== 'narration' || isFormattingNarrationSegment(segment)) continue;
+
+    const previous = segments[index - 1];
+    const next = segments[index + 1];
+    let text = String(segment.text ?? '');
+    let start = toInt(segment.start, NaN);
+    let end = toInt(segment.end, NaN);
+
+    if (previous?.type === 'dialogue' && toInt(previous.end, NaN) === start) {
+      const prefixLength = formattingPrefixLength(text);
+      const prefix = text.slice(0, prefixLength);
+      if (containsQuote(prefix)) {
+        appendSegmentText(previous, prefix, start + prefixLength);
+        text = text.slice(prefixLength);
+        start += prefixLength;
+        absorbedEdges += 1;
+      }
+    }
+
+    if (next?.type === 'dialogue' && toInt(next.start, NaN) === end) {
+      const suffixStart = formattingSuffixStart(text);
+      const suffix = text.slice(suffixStart);
+      if (containsQuote(suffix)) {
+        prependSegmentText(next, suffix, start + suffixStart);
+        text = text.slice(0, suffixStart);
+        end = start + suffixStart;
+        absorbedEdges += 1;
+      }
+    }
+
+    segment.start = start;
+    segment.end = end;
+    segment.text = text;
+    segment.char_count = text.length;
+  }
+  return absorbedEdges;
+}
+
+function formattingPrefixLength(text: string): number {
+  let index = 0;
+  while (index < text.length && FORMATTING_NARRATION_RE.test(text[index])) index += 1;
+  return index;
+}
+
+function formattingSuffixStart(text: string): number {
+  let index = text.length;
+  while (index > 0 && FORMATTING_NARRATION_RE.test(text[index - 1])) index -= 1;
+  return index;
+}
+
+function containsQuote(text: string): boolean {
+  for (const char of text) {
+    if (
+      DIRECTIONAL_OPEN_QUOTES.has(char)
+      || DIRECTIONAL_CLOSE_QUOTES.has(char)
+      || SYMMETRIC_TTS_QUOTES.has(char)
+    ) return true;
+  }
+  return false;
+}
+
+function appendSegmentText(segment: AnyRecord, addition: string, end: number): void {
+  if (!addition) return;
+  segment.text = `${String(segment.text ?? '')}${addition}`;
+  segment.end = end;
+  segment.char_count = String(segment.text).length;
+}
+
+function prependSegmentText(segment: AnyRecord, addition: string, start: number): void {
+  if (!addition) return;
+  segment.text = `${addition}${String(segment.text ?? '')}`;
+  segment.start = start;
+  segment.char_count = String(segment.text).length;
+}
+
+function formattingBridgeSplit(text: string): number {
+  let hasDirectionalClose = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (DIRECTIONAL_CLOSE_QUOTES.has(char)) {
+      hasDirectionalClose = true;
+      continue;
+    }
+    if (DIRECTIONAL_OPEN_QUOTES.has(char)) return hasDirectionalClose ? index : 0;
+  }
+
+  const symmetricPositions: number[] = [];
+  for (let index = 0; index < text.length; index += 1) {
+    if (SYMMETRIC_TTS_QUOTES.has(text[index])) symmetricPositions.push(index);
+  }
+  if (symmetricPositions.length >= 2) return symmetricPositions.at(-1)!;
+  if (symmetricPositions.length === 1) {
+    const position = symmetricPositions[0];
+    return position <= text.length / 2 ? 0 : text.length;
+  }
+  return text.length;
+}
+
 function ttsSegmentId(chapterId: any, index: number): string {
   const chapterNumber = Number.parseInt(String(chapterId), 10);
   const chapterPart = Number.isFinite(chapterNumber) ? `c${String(chapterNumber).padStart(3, '0')}` : `c${chapterId || 'unknown'}`;
@@ -466,11 +641,11 @@ function ttsSegmentSummary(segments: AnyRecord[]): AnyRecord {
 }
 
 function emptyTtsSegmentSummary(): AnyRecord {
-  return { segment_count: 0, narration_segment_count: 0, dialogue_segment_count: 0, narration_chars: 0, dialogue_chars: 0, skipped_dialogue_span_count: 0, source_text_chars: 0, coverage_ok: true };
+  return { segment_count: 0, narration_segment_count: 0, dialogue_segment_count: 0, narration_chars: 0, dialogue_chars: 0, skipped_dialogue_span_count: 0, source_text_chars: 0, formatting_narration_segments_absorbed: 0, coverage_ok: true };
 }
 
 function addTtsSegmentSummary(target: AnyRecord, source: AnyRecord): void {
-  for (const key of ['segment_count', 'narration_segment_count', 'dialogue_segment_count', 'narration_chars', 'dialogue_chars', 'skipped_dialogue_span_count', 'source_text_chars']) {
+  for (const key of ['segment_count', 'narration_segment_count', 'dialogue_segment_count', 'narration_chars', 'dialogue_chars', 'skipped_dialogue_span_count', 'source_text_chars', 'formatting_narration_segments_absorbed']) {
     target[key] = toInt(target[key], 0) + toInt(source[key], 0);
   }
   target.coverage_ok = Boolean(target.coverage_ok) && source.coverage_ok !== false;

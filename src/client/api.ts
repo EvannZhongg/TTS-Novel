@@ -83,7 +83,7 @@ export function clearStoredEmail(): void {
   }
 }
 
-async function request<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<T> {
+async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
@@ -173,6 +173,13 @@ export interface ProcessedTask {
 export interface ChapterDetailResponse {
   chapter: ChapterSummary & { source_text: string; result: Record<string, unknown> | null };
   navigation: { previous: AdjacentChapter | null; next: AdjacentChapter | null };
+  roles: Array<{
+    role_id?: string;
+    canonical_name?: string;
+    gender?: string;
+    aliases?: string[];
+    voice_profile?: { description?: string; age_group?: string; confidence?: number; gender?: string };
+  }>;
 }
 
 export interface BookResultResponse {
@@ -310,6 +317,27 @@ export const api = {
 
   getChapter: (projectId: string, chapterId: string, email: string) =>
     getCachedChapter(projectId, chapterId, email),
+
+  updateSegmentSpeaker: (
+    projectId: string,
+    chapterId: string,
+    email: string,
+    segmentId: string,
+    targetRoleKey: string,
+  ) =>
+    request<{
+      changed: boolean;
+      log_id: number | null;
+      chapter: { id: string; result: Record<string, unknown> | null };
+    }>('PATCH', `/api/app/projects/${projectId}/chapters/${chapterId}`, {
+      email,
+      segment_id: segmentId,
+      target_role_key: targetRoleKey,
+    }).then((response) => {
+      // 当前章节和可能已预取的同章结果必须失效，避免保存后重新显示旧说话人。
+      chapterCache.delete(userResourceKey(email, projectId, chapterId));
+      return response;
+    }),
 
   prefetchChapter: (projectId: string, chapterId: string, email: string) => {
     void getCachedChapter(projectId, chapterId, email).catch(() => null);

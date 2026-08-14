@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
 import { findUserByEmail, isValidEmailShape, normalizeEmail } from '../db/users';
-import { getProject } from '../db/projects';
+import { getProject, getProjectMeta, type ProjectListItem } from '../db/projects';
 import type { DemoUser, Project } from '../db/types';
 
 /**
@@ -82,6 +82,17 @@ export async function requireUser(email: unknown): Promise<DemoUser> {
 export async function requireOwnedProject(projectId: string, email: unknown): Promise<{ project: Project; user: DemoUser }> {
   const user = await requireUser(email);
   const project = await getProject(projectId);
+  if (!project || project.user_id !== user.id) throw notFound('项目不存在');
+  return { project, user };
+}
+
+/** 高频元数据读取版本：归属校验时不把可能很大的 book_result 从数据库拖出来。 */
+export async function requireOwnedProjectMeta(
+  projectId: string,
+  email: unknown,
+): Promise<{ project: ProjectListItem; user: DemoUser }> {
+  const user = await requireUser(email);
+  const project = await getProjectMeta(projectId);
   if (!project || project.user_id !== user.id) throw notFound('项目不存在');
   return { project, user };
 }

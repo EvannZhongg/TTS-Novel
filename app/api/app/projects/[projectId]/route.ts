@@ -1,4 +1,9 @@
-import { handleRoute, requireOwnedProject, searchEmail } from '@/src/server/api/helpers';
+import {
+  handleRoute,
+  requireOwnedProject,
+  requireOwnedProjectMeta,
+  searchEmail,
+} from '@/src/server/api/helpers';
 import { listChapterSummaries } from '@/src/server/db/chapters';
 import { countPendingJobs } from '@/src/server/db/jobs';
 import { deleteProject } from '@/src/server/db/projects';
@@ -13,7 +18,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: Request, { params }: { params: Promise<{ projectId: string }> }) {
   return handleRoute(async () => {
     const { projectId } = await params;
-    const { project } = await requireOwnedProject(projectId, searchEmail(request));
+    const { project } = await requireOwnedProjectMeta(projectId, searchEmail(request));
     const [chapters, pendingJobs] = await Promise.all([
       listChapterSummaries(projectId),
       countPendingJobs(projectId),
@@ -38,7 +43,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ proj
         error: project.error,
         created_at: project.created_at,
         updated_at: project.updated_at,
-        has_book_result: Boolean(project.book_result),
+        // 新版聚合会推进 aggregated_revision；状态判断兼容迁移前已有的完成项目。
+        has_book_result: project.aggregated_revision > 0
+          || project.status === 'completed'
+          || project.status === 'partially_failed',
       },
       chapters,
       pending_jobs: pendingJobs,

@@ -170,6 +170,113 @@ export interface ProcessedTask {
   chapterId?: string;
 }
 
+export interface ChapterDetailResponse {
+  chapter: ChapterSummary & { source_text: string; result: Record<string, unknown> | null };
+  navigation: { previous: AdjacentChapter | null; next: AdjacentChapter | null };
+}
+
+export interface BookResultResponse {
+  book_result: Record<string, unknown> | null;
+  status: string;
+  content_revision: number;
+  aggregated_revision: number;
+  aggregate_status: AggregateStatus;
+  up_to_date: boolean;
+}
+
+interface RequestCacheEntry<T> {
+  promise: Promise<T>;
+  expiresAt: number;
+}
+
+// 仅保存在当前页面进程内，不写 localStorage。book_result 在同一项目的章节间
+// 完全复用；章节缓存主要用于让“下一章”预取真正命中，而不是导航后再请求一次。
+const BOOK_RESULT_CACHE_TTL_MS = 5 * 60 * 1000;
+const CHAPTER_PREFETCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_CHAPTER_CACHE_ENTRIES = 8;
+const bookResultCache = new Map<string, RequestCacheEntry<BookResultResponse>>();
+const chapterCache = new Map<string, RequestCacheEntry<ChapterDetailResponse>>();
+
+function userResourceKey(email: string, ...parts: string[]): string {
+  return [normalizeStoredEmail(email), ...parts].join(':');
+}
+
+function rememberRequest<T>(
+  cache: Map<string, RequestCacheEntry<T>>,
+  key: string,
+  ttlMs: number,
+  load: () => Promise<T>,
+): Promise<T> {
+  const now = Date.now();
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > now) {
+    // Map 的插入顺序被用作轻量 LRU；命中时移到末尾。
+    cache.delete(key);
+    cache.set(key, cached);
+    return cached.promise;
+  }
+  if (cached) cache.delete(key);
+
+  const promise = load();
+  const entry = { promise, expiresAt: now + ttlMs };
+  cache.set(key, entry);
+  void promise.catch(() => {
+    if (cache.get(key) === entry) cache.delete(key);
+  });
+  return promise;
+}
+
+function trimChapterCache(): void {
+  while (chapterCache.size > MAX_CHAPTER_CACHE_ENTRIES) {
+    const oldestKey = chapterCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    chapterCache.delete(oldestKey);
+  }
+}
+
+async function getCachedBookResult(
+  projectId: string,
+  email: string,
+  expectedRevision?: number,
+): Promise<BookResultResponse> {
+  const key = userResourceKey(email, projectId);
+  const load = () => request<BookResultResponse>(
+    'GET',
+    `/api/app/projects/${projectId}/result?email=${encodeURIComponent(email)}`,
+  );
+
+  const cached = bookResultCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    const result = await cached.promise;
+    if (expectedRevision === undefined || result.aggregated_revision === expectedRevision) {
+      return result;
+    }
+    // 项目轮询已经看到更新的聚合版本时，旧 book_result 必须立即失效。
+    if (bookResultCache.get(key) === cached) bookResultCache.delete(key);
+  }
+
+  return rememberRequest(bookResultCache, key, BOOK_RESULT_CACHE_TTL_MS, load);
+}
+
+function getCachedChapter(
+  projectId: string,
+  chapterId: string,
+  email: string,
+): Promise<ChapterDetailResponse> {
+  const key = userResourceKey(email, projectId, chapterId);
+  const result = rememberRequest(
+    chapterCache,
+    key,
+    CHAPTER_PREFETCH_CACHE_TTL_MS,
+    () => request<ChapterDetailResponse>(
+      'GET',
+      `/api/app/projects/${projectId}/chapters/${chapterId}?email=${encodeURIComponent(email)}`,
+    ),
+  );
+  trimChapterCache();
+  return result;
+}
+
 // ------------------------------------------------------------------ 调用
 export const api = {
   session: (email: string) => request<{ user_id: string; email: string }>('POST', '/api/app/session', { email }),
@@ -202,24 +309,14 @@ export const api = {
     ),
 
   getChapter: (projectId: string, chapterId: string, email: string) =>
-    request<{
-      chapter: ChapterSummary & { source_text: string; result: Record<string, unknown> | null };
-      navigation: { previous: AdjacentChapter | null; next: AdjacentChapter | null };
-    }>(
-      'GET', `/api/app/projects/${projectId}/chapters/${chapterId}?email=${encodeURIComponent(email)}`,
-    ),
+    getCachedChapter(projectId, chapterId, email),
 
-  getBookResult: (projectId: string, email: string) =>
-    request<{
-      book_result: Record<string, unknown> | null;
-      status: string;
-      content_revision: number;
-      aggregated_revision: number;
-      aggregate_status: AggregateStatus;
-      up_to_date: boolean;
-    }>(
-      'GET', `/api/app/projects/${projectId}/result?email=${encodeURIComponent(email)}`,
-    ),
+  prefetchChapter: (projectId: string, chapterId: string, email: string) => {
+    void getCachedChapter(projectId, chapterId, email).catch(() => null);
+  },
+
+  getBookResult: (projectId: string, email: string, expectedRevision?: number) =>
+    getCachedBookResult(projectId, email, expectedRevision),
 
   getUsage: (projectId: string, email: string) =>
     request<{ usage: Record<string, number | string>; recent_failures: Record<string, unknown>[] }>(

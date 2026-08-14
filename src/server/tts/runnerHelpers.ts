@@ -1,6 +1,10 @@
 import { toFloat, toInt } from './utils';
 import type { AnyRecord, GroundingCandidate, QuoteSpanCandidate, Settings } from './types';
 
+// 当前阶段尚未接入真实音色库，所有人物统一使用占位 ID。
+// role_id 仍保持唯一，用于角色绑定；voice_profile_id 不再生成序号。
+const PLACEHOLDER_VOICE_PROFILE_ID = 'xxxx';
+
 /**
  * 结果里回显的 pipeline 配置。
  *
@@ -54,7 +58,7 @@ export function buildRoleProfileInputs(aliases: AnyRecord[], chapters: AnyRecord
     const index = roles.length + 1;
     roles.push({
       role_id: `role_${String(index).padStart(4, '0')}`,
-      voice_profile_id: `voice_${String(index).padStart(4, '0')}`,
+      voice_profile_id: PLACEHOLDER_VOICE_PROFILE_ID,
       canonical_name: canonicalName,
       gender: normalizeGender(entry.gender),
       aliases: entryAliases(entry),
@@ -169,7 +173,7 @@ export function buildMinorRoleProfileGroups(roles: AnyRecord[]): AnyRecord[] {
     if (!groupRoles.length) continue;
     groups.push({
       group_id: minorRoleGroupId(gender),
-      voice_profile_id: minorVoiceProfileId(gender),
+      voice_profile_id: PLACEHOLDER_VOICE_PROFILE_ID,
       gender,
       role_count: groupRoles.length,
       roles: groupRoles.slice(0, 30).map(minorRoleProfileSample),
@@ -192,10 +196,6 @@ function minorRoleProfileSample(role: AnyRecord): AnyRecord {
 
 function minorRoleGroupId(gender: any): string {
   return `minor_${normalizeGender(gender)}`;
-}
-
-function minorVoiceProfileId(gender: any): string {
-  return `voice_minor_${normalizeGender(gender)}`;
 }
 
 export function roleRegistryFromProfileGeneration(
@@ -242,7 +242,7 @@ function roleRegistryFromMinorGroupProfiles(minorRoles: AnyRecord[], llmResult: 
     const gender = normalizeGender(role.gender);
     const groupId = minorRoleGroupId(gender);
     const rawProfile = profilesByGroupId[groupId];
-    const roleWithSharedVoice = { ...role, voice_profile_id: minorVoiceProfileId(gender) };
+    const roleWithSharedVoice = { ...role, voice_profile_id: PLACEHOLDER_VOICE_PROFILE_ID };
     const voiceProfile = rawProfile ? llmVoiceProfile(roleWithSharedVoice, rawProfile, 'llm_minor_group') : fallbackVoiceProfile(gender, `missing minor group profile: ${groupId}`);
     return roleRegistryEntry(roleWithSharedVoice, voiceProfile);
   });

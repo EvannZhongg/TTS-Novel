@@ -159,6 +159,13 @@ export default function ChapterPage({ params }: { params: Promise<{ projectId: s
     return () => { alive = false; };
   }, [email, projectId, chapterId, closeSegmentPopover]);
 
+  useEffect(() => {
+    // 未完成全书聚合时 enrichment 仍可能变化，不预取这类不稳定结果。
+    // 已稳定的章节则提前下载下一章；导航后 api.getChapter 会直接复用该 Promise。
+    if (!email || !chapter?.enriched || !navigation.next) return;
+    api.prefetchChapter(projectId, navigation.next.id, email);
+  }, [chapter?.enriched, email, navigation.next, projectId]);
+
   const result = chapter?.result as Record<string, unknown> | null | undefined;
   const segments = useMemo(() => (Array.isArray(result?.tts_segments) ? (result!.tts_segments as TtsSegment[]) : []), [result]);
   const dialogueCount = segments.filter((segment) => segment.type === 'dialogue').length;

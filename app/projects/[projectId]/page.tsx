@@ -34,6 +34,7 @@ const GENDER_LABEL: Record<string, string> = {
   female: '女',
   unknown: '未知',
 };
+const PLACEHOLDER_VOICE_PROFILE_ID = 'xxxx';
 
 export default function ProjectPage({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = use(params);
@@ -85,7 +86,7 @@ export default function ProjectPage({ params }: { params: Promise<{ projectId: s
     let alive = true;
     setRolesLoading(true);
     setRolesError(null);
-    void api.getBookResult(projectId, email)
+    void api.getBookResult(projectId, email, project.aggregated_revision)
       .then((response) => {
         if (!alive) return;
         const registry = (response.book_result as { role_registry?: ProjectRole[] } | null)?.role_registry;
@@ -424,7 +425,7 @@ export default function ProjectPage({ params }: { params: Promise<{ projectId: s
                         <dl className="project-role-meta">
                           <div>
                             <dt>音色 ID</dt>
-                            <dd>{role.voice_profile_id || '—'}</dd>
+                            <dd>{PLACEHOLDER_VOICE_PROFILE_ID}</dd>
                           </div>
                           <div>
                             <dt>对白证据</dt>
